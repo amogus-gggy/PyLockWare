@@ -11,7 +11,7 @@ class StringProtectionTransformer(ast.NodeTransformer):
 
     def __init__(self, name_gen_settings='english'):
         self.string_counter = 0
-        self.protected_strings = {}
+        self.string_protected = False
         self.name_gen_settings = name_gen_settings
 
         # Generate completely random names for helper functions
@@ -171,9 +171,8 @@ class StringProtectionTransformer(ast.NodeTransformer):
             return node
 
         # Protect the string
-
-        # Generate a completely random variable name instead of using counter
-        var_name = self._generate_random_name()
+        self.string_protected = True
+        self.string_counter += 1
 
         # Encode with base64 and zlib
 
@@ -181,11 +180,17 @@ class StringProtectionTransformer(ast.NodeTransformer):
             zlib.compress(original_string.encode("utf-8"))
         ).decode("utf-8")
 
-        self.protected_strings[var_name] = encoded
+        # Return a Call node to the decode function
+        return ast.Call(
+            func=ast.Name(id=self.decode_func_name, ctx=ast.Load()),
+            args=[ast.Constant(value=encoded)],
+            keywords=[],
+        )
 
-        # Return a Name node that will be replaced later
-
-        return ast.Name(id=var_name, ctx=ast.Load())
+    def reset(self):
+        """Reset the state for processing a new file."""
+        self.string_counter = 0
+        self.string_protected = False
 
     def apply_protection(self, code):
         """Apply string protection to Python code."""
@@ -196,68 +201,24 @@ class StringProtectionTransformer(ast.NodeTransformer):
             tree = ast.parse(code)
 
             # Transform the tree
-
-            # Use the same name generator settings as the current instance
-            transformer = StringProtectionTransformer(name_gen_settings=getattr(self, 'name_gen_settings', 'english'))
-
-            protected_tree = transformer.visit(tree)
+            protected_tree = self.visit(tree)
 
             # Add string decoding helper at the beginning
 
-            if transformer.protected_strings:
-                # Define the protected string prefix as a global variable
-                protected_prefix_var = f"PROTECTED_STR_PREFIX_{transformer.protected_str_prefix[1:]}"
-                
+            if self.string_protected:
                 # Create the decoder function with random names
                 decoder_code = f"""import base64
 import zlib
 
-# Global variable for protected string prefix
-{protected_prefix_var} = '{transformer.protected_str_prefix}'
-
-def {transformer.decode_func_name}(encoded_str):
+def {self.decode_func_name}(encoded_str):
     return zlib.decompress(base64.b64decode(encoded_str.encode('utf-8'))).decode('utf-8')
 
 # Advanced f-string protection helpers
-def {transformer.fstring_func_name}(*args):
+def {self.fstring_func_name}(*args):
     \"\"\"Helper function for protected f-strings.\"\"\"
-    result = ""
-    for arg in args:
-        if isinstance(arg, str) and arg.startswith({protected_prefix_var}):
-            # This is a protected string, decode it
-            var_name = arg
-            if var_name in globals():
-                result += globals()[var_name]
-            else:
-                result += arg
-        else:
-            # This is an expression result
-            result += str(arg)
-    return result
+    return "".join(map(str, args))
 
-def {transformer.format_func_name}(template, *args):
-    \"\"\"Alternative f-string formatter for complex cases.\"\"\"
-    try:
-        # Decode template if it's protected
-        if isinstance(template, str) and template.startswith({protected_prefix_var}):
-            if template in globals():
-                template = globals()[template]
-
-        # Simple string formatting
-        return template.format(*args)
-    except:
-        # Fallback to basic concatenation
-        result = str(template)
-        for arg in args:
-            result += str(arg)
-        return result
 """
-
-                # Add protected string variables
-
-                for var_name, encoded_value in transformer.protected_strings.items():
-                    decoder_code += f"{var_name} = {transformer.decode_func_name}('{encoded_value}')\n"
-
                 # Parse the decoder code
 
                 decoder_tree = ast.parse(decoder_code)
@@ -296,7 +257,7 @@ def protect_strings_in_file(file_path):
                 f.write(protected_code)
 
             print(
-                f"Protected {len(protector.protected_strings)} strings in {file_path}"
+                f"Protected strings in {file_path}"
             )
 
             return True
