@@ -6,6 +6,10 @@ def main():
     config = Config()
     print(f"App Name: {config.app_name}")
     print(f"Version: {config.version}")
+    a = 5
+    b = 7
+    if a > b:
+        print(f"{a} is greater than {b}")
     
     result = utils.calculate_sum(10, 20)
     print(f"Calculation result: {result}")

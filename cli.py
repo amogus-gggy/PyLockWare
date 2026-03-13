@@ -34,6 +34,8 @@ def main():
     parser.add_argument("--disable-traceback", action="store_true", help="Disable traceback by setting sys.tracebacklimit = 0 at the start of each file")
     parser.add_argument("--name-gen", choices=['english', 'chinese', 'mixed', 'numbers', 'hex'],
                        default='english', help="Character set for name generation (default: english)")
+    parser.add_argument("--metadata-strip", action="store_true", help="Enable metadata stripping (remove __doc__, __annotations__, type hints)")
+    parser.add_argument("--bool-obf", action="store_true", help="Enable boolean expression obfuscation (True/False → complex expressions)")
 
     # Nuitka EXE packaging options
     nuitka_group = parser.add_argument_group("Nuitka EXE Packaging Options")
@@ -86,6 +88,8 @@ def main():
         opaque_complexity=args.opaque_complexity,
         name_gen=args.name_gen,
         disable_traceback=args.disable_traceback,
+        metadata_strip=args.metadata_strip,
+        bool_obf=args.bool_obf,
         enable_nuitka=args.nuitka,
         nuitka_onefile=args.nuitka_onefile,
         nuitka_standalone=args.nuitka_standalone,

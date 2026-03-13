@@ -7,19 +7,27 @@ from pylockware.core.name_generator import generate_random_name
 
 
 class StringProtectionTransformer(ast.NodeTransformer):
-    """AST transformer to protect string literals using base64 and zlib."""
+    """AST transformer to protect string literals using multi-layer encoding."""
 
     def __init__(self, name_gen_settings='english'):
         self.string_counter = 0
         self.string_protected = False
         self.name_gen_settings = name_gen_settings
+        self.xor_key = random.randint(1, 255)  # Fixed XOR key for all strings
 
         # Generate completely random names for helper functions
         self.decode_func_name = self._generate_random_name()
         self.fstring_func_name = self._generate_random_name()
         self.format_func_name = self._generate_random_name()
         self.protected_str_prefix = self._generate_random_name()
-    
+        
+        # Additional obfuscation function names
+        self.layer1_name = self._generate_random_name()
+        self.layer2_name = self._generate_random_name()
+        self.layer3_name = self._generate_random_name()
+        self.checksum_name = self._generate_random_name()
+        self.validate_name = self._generate_random_name()
+
     def _generate_random_name(self, prefix=None):
         """Generate a random name. If prefix is provided, use it; otherwise generate completely random name."""
         if prefix:
@@ -131,7 +139,7 @@ class StringProtectionTransformer(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def _protect_string(self, node):
-        """Protect a string node by encoding it."""
+        """Protect a string node by encoding it with multi-layer protection."""
 
         original_string = node.value if hasattr(node, "value") else node.s
 
@@ -174,16 +182,38 @@ class StringProtectionTransformer(ast.NodeTransformer):
         self.string_protected = True
         self.string_counter += 1
 
-        # Encode with base64 and zlib
+        # Multi-layer encoding: XOR -> ROT13 -> Reverse -> zlib -> base64
+        data = original_string.encode("utf-8")
+        
+        # Layer 1: XOR encryption
+        xor_data = bytes([b ^ self.xor_key for b in data])
+        
+        # Layer 2: ROT13 for bytes (alphabetic characters only)
+        rot13_data = bytearray()
+        for b in xor_data:
+            if 65 <= b <= 90:  # A-Z
+                rot13_data.append((b - 65 + 13) % 26 + 65)
+            elif 97 <= b <= 122:  # a-z
+                rot13_data.append((b - 97 + 13) % 26 + 97)
+            else:
+                rot13_data.append(b)
+        
+        # Layer 3: Reverse bytes
+        reversed_data = bytes(rot13_data[::-1])
+        
+        # Layer 4: zlib compression
+        compressed = zlib.compress(reversed_data)
+        
+        # Layer 5: base64 encoding
+        encoded = base64.b64encode(compressed).decode("utf-8")
+        
+        # Calculate checksum for validation
+        checksum = sum(original_string.encode("utf-8")) % 256
 
-        encoded = base64.b64encode(
-            zlib.compress(original_string.encode("utf-8"))
-        ).decode("utf-8")
-
-        # Return a Call node to the decode function
+        # Return a Call node to the decode function with checksum
         return ast.Call(
             func=ast.Name(id=self.decode_func_name, ctx=ast.Load()),
-            args=[ast.Constant(value=encoded)],
+            args=[ast.Constant(value=encoded), ast.Constant(value=checksum)],
             keywords=[],
         )
 
@@ -191,6 +221,15 @@ class StringProtectionTransformer(ast.NodeTransformer):
         """Reset the state for processing a new file."""
         self.string_counter = 0
         self.string_protected = False
+        self.xor_key = random.randint(1, 255)  # New XOR key for each file
+        # Regenerate all function names
+        self.decode_func_name = self._generate_random_name()
+        self.fstring_func_name = self._generate_random_name()
+        self.layer1_name = self._generate_random_name()
+        self.layer2_name = self._generate_random_name()
+        self.layer3_name = self._generate_random_name()
+        self.checksum_name = self._generate_random_name()
+        self.validate_name = self._generate_random_name()
 
     def apply_protection(self, code):
         """Apply string protection to Python code."""
@@ -206,19 +245,83 @@ class StringProtectionTransformer(ast.NodeTransformer):
             # Add string decoding helper at the beginning
 
             if self.string_protected:
-                # Create the decoder function with random names
-                decoder_code = f"""import base64
+                # Create the multi-layer decoder function with obfuscated code
+                decoder_code = f'''import base64
 import zlib
+import sys
 
-def {self.decode_func_name}(encoded_str):
-    return zlib.decompress(base64.b64decode(encoded_str.encode('utf-8'))).decode('utf-8')
+# Obfuscation layer helpers
+def {self.layer1_name}(data, key):
+    
+    _ = len(data)  # dummy op
+    __ = key ^ 0   # dummy op
+    return bytes([b ^ key for b in data])
 
-# Advanced f-string protection helpers
+def {self.layer2_name}(data):
+    
+    _result = bytearray()
+    for _b in data:
+        if 65 <= _b <= 90:
+            _result.append((_b - 65 + 13) % 26 + 65)
+        elif 97 <= _b <= 122:
+            _result.append((_b - 97 + 13) % 26 + 97)
+        else:
+            _result.append(_b)
+    return bytes(_result)
+
+def {self.layer3_name}(data):
+    
+    _len = len(data)
+    return data[::-1]
+
+def {self.checksum_name}(s):
+    
+    return sum(s.encode("utf-8")) % 256
+
+def {self.validate_name}(expected, actual):
+    
+    _dummy = expected ^ expected  # always 0
+    _dummy2 = actual ^ actual     # always 0
+    if expected != actual:
+        raise RuntimeError("Checksum mismatch")
+    return True
+
+def {self.decode_func_name}(encoded_str, expected_checksum):
+    
+    
+    _flags = sys.getflags() if hasattr(sys, "getflags") else None
+    
+    
+    _decoded = base64.b64decode(encoded_str.encode("utf-8"))
+    
+    
+    _decompressed = zlib.decompress(_decoded)
+    
+    
+    _reversed = {self.layer3_name}(_decompressed)
+    
+    
+    _rot13 = {self.layer2_name}(_reversed)
+    
+    
+    _xor_key = {self.xor_key}
+    _result = {self.layer1_name}(_rot13, _xor_key)
+    
+    
+    _final = _result.decode("utf-8")
+    
+    
+    {self.validate_name}(expected_checksum, {self.checksum_name}(_final))
+    
+    return _final
+
+
 def {self.fstring_func_name}(*args):
-    \"\"\"Helper function for protected f-strings.\"\"\"
+    
+    _empty = ""  # dummy
     return "".join(map(str, args))
 
-"""
+'''
                 # Parse the decoder code
 
                 decoder_tree = ast.parse(decoder_code)

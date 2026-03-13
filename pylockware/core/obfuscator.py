@@ -22,6 +22,8 @@ from pylockware.modules.state_machine_module import StateMachineModule
 from pylockware.modules.nuitka_builder_module import NuitkaBuilderModule
 from pylockware.modules.builtin_dispatcher_module import BuiltinDispatcherModule
 from pylockware.modules.junk_code_module import JunkCodeModule
+from pylockware.modules.metadata_stripper_module import MetadataStripperModule
+from pylockware.modules.boolean_obf_module import BooleanObfModule
 
 
 class PyObfuscator:
@@ -36,11 +38,12 @@ class PyObfuscator:
                  remap: bool = False, anti_debug: str = None, string_prot: bool = False, num_obf: bool = False,
                  import_obf: bool = False, state_machine: bool = False, builtin_dispatcher: bool = False,
                  junk_code: bool = False, junk_density: float = 0.5, opaque_complexity: str = 'high',
-                 name_gen: str = 'english',
+                 name_gen: str = 'english', disable_traceback: bool = False,
+                 metadata_strip: bool = False, bool_obf: bool = False,
                  enable_nuitka: bool = False, nuitka_onefile: bool = True, nuitka_standalone: bool = True,
                  nuitka_output_name: str = None, nuitka_disable_console: bool = True, nuitka_icon: str = None,
                  nuitka_admin: bool = False, nuitka_plugins: List[str] = None, nuitka_extra_imports: List[str] = None,
-                 nuitka_options: List[str] = None, disable_traceback: bool = False):
+                 nuitka_options: List[str] = None):
         self.project_path = Path(project_path)
         self.entry_point = Path(entry_point)
         self.entry_function = entry_function
@@ -57,6 +60,8 @@ class PyObfuscator:
         self.opaque_complexity = opaque_complexity  # Opaque predicate complexity
         self.name_gen = name_gen  # Character set for name generation
         self.disable_traceback = disable_traceback  # Disable traceback by setting sys.tracebacklimit = 0
+        self.metadata_strip = metadata_strip  # Enable metadata stripping
+        self.bool_obf = bool_obf  # Enable boolean obfuscation
 
         # Nuitka options
         self.enable_nuitka = enable_nuitka
@@ -142,11 +147,6 @@ class PyObfuscator:
             }
             self.module_manager.add_module(RemapModule(remap_config))
 
-        # Add modules based on configuration
-        if self.string_prot:
-            string_prot_config = {'name_gen': self.name_gen}
-            self.module_manager.add_module(StringProtectModule(string_prot_config))
-
         if self.anti_debug:
             anti_debug_config = {
                 'mode': self.anti_debug,
@@ -167,7 +167,7 @@ class PyObfuscator:
             state_machine_config = {
                 'name_gen': self.name_gen,
                 'entry_point': str(self.entry_point),
-                'add_junk_states': True  # Добавлять мусорные состояния
+                'add_junk_states': True
             }
             self.module_manager.add_module(StateMachineModule(state_machine_config))
 
@@ -182,6 +182,19 @@ class PyObfuscator:
                 'opaque_complexity': self.opaque_complexity
             }
             self.module_manager.add_module(JunkCodeModule(junk_code_config))
+
+        if self.metadata_strip:
+            self.module_manager.add_module(MetadataStripperModule({}))
+
+        if self.bool_obf:
+            bool_obf_config = {'name_gen': self.name_gen}
+            self.module_manager.add_module(BooleanObfModule(bool_obf_config))
+
+        # String protection should be applied AFTER other obfuscations
+        # so that the decoder function is not broken by other transformations
+        if self.string_prot:
+            string_prot_config = {'name_gen': self.name_gen}
+            self.module_manager.add_module(StringProtectModule(string_prot_config))
 
         # Add disable traceback module BEFORE Nuitka (if enabled)
         # This needs to be done before Nuitka compiles the files
@@ -215,7 +228,7 @@ class PyObfuscator:
         print(f"Starting obfuscation of project: {self.project_path}")
         print(f"Entry point: {self.entry_point}")
         print(f"Entry function: {self.entry_function}")
-        print(f"Modules enabled: remap={self.remap}, anti_debug={self.anti_debug}, string_prot={self.string_prot}, num_obf={self.num_obf}, import_obf={self.import_obf}, state_machine={self.state_machine}, builtin_dispatcher={self.builtin_dispatcher}, junk_code={self.junk_code}")
+        print(f"Modules enabled: remap={self.remap}, anti_debug={self.anti_debug}, string_prot={self.string_prot}, num_obf={self.num_obf}, import_obf={self.import_obf}, state_machine={self.state_machine}, builtin_dispatcher={self.builtin_dispatcher}, junk_code={self.junk_code}, metadata_strip={self.metadata_strip}, bool_obf={self.bool_obf}")
         print(f"Name generator settings: {self.name_gen}")
         if self.enable_nuitka:
             print(f"Nuitka packaging: enabled (onefile={self.nuitka_onefile})")

@@ -191,6 +191,15 @@ class ObfuscatorGUI(QMainWindow):
         string_prot_layout.addStretch()
         layout.addLayout(string_prot_layout)
 
+        # Boolean obfuscation option
+        bool_obf_layout = QHBoxLayout()
+        self.bool_obf_checkbox = QCheckBox("Boolean obfuscation")
+        self.bool_obf_checkbox.setToolTip("Enable boolean obfuscation using arithmetic expressions")
+        bool_obf_layout.addWidget(self.bool_obf_checkbox)
+        bool_obf_layout.addWidget(self.create_help_button("Boolean obfuscation replaces boolean literals (True/False) with equivalent arithmetic expressions, making it harder to understand the logic flow."))
+        bool_obf_layout.addStretch()
+        layout.addLayout(bool_obf_layout)
+
         # Disable traceback option
         traceback_layout = QHBoxLayout()
         self.disable_traceback_checkbox = QCheckBox("Disable traceback")
@@ -199,6 +208,15 @@ class ObfuscatorGUI(QMainWindow):
         traceback_layout.addWidget(self.create_help_button("Disables Python traceback output by setting sys.tracebacklimit = 0 at the start of each obfuscated file. This prevents error details from being shown."))
         traceback_layout.addStretch()
         layout.addLayout(traceback_layout)
+
+        # Metadata stripper option
+        metadata_strip_layout = QHBoxLayout()
+        self.metadata_strip_checkbox = QCheckBox("Strip metadata")
+        self.metadata_strip_checkbox.setToolTip("Remove docstrings and other metadata from obfuscated code")
+        metadata_strip_layout.addWidget(self.metadata_strip_checkbox)
+        metadata_strip_layout.addWidget(self.create_help_button("Removes docstrings, comments, and other metadata from the code to reduce file size and remove potentially sensitive information."))
+        metadata_strip_layout.addStretch()
+        layout.addLayout(metadata_strip_layout)
 
         layout.addStretch()
         tab.setLayout(layout)
@@ -394,6 +412,8 @@ class ObfuscatorGUI(QMainWindow):
             'opaque_complexity': self._get_opaque_complexity(),
             'name_gen': self._get_name_gen_setting(),
             'disable_traceback': self.disable_traceback_checkbox.isChecked(),
+            'metadata_strip': self.metadata_strip_checkbox.isChecked(),
+            'bool_obf': self.bool_obf_checkbox.isChecked(),
         }
 
         # Set anti-debug option
