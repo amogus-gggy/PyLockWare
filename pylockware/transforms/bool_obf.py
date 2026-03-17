@@ -1,256 +1,213 @@
 """
 Boolean Expression Obfuscation Module for PyLockWare
-Obfuscates True/False/bool operations with complex equivalent expressions
+Obfuscates True/False/bool operations with bitwise-heavy combined expressions.
 """
 import ast
 import random
 from pylockware.core.name_generator import generate_random_name
 
 
+def _bconst(v):
+    return ast.Constant(v)
+
+
+def _bname(n):
+    return ast.Name(id=n, ctx=ast.Load())
+
+
+def _binop(l, op, r):
+    return ast.BinOp(left=l, op=op, right=r)
+
+
+def _cmp(l, op, r):
+    return ast.Compare(left=l, ops=[op], comparators=[r])
+
+
+def _unary(op, operand):
+    return ast.UnaryOp(op=op, operand=operand)
+
+
+def _call(name, *args):
+    return ast.Call(func=_bname(name), args=list(args), keywords=[])
+
+
+def _bool(node):
+    return _call('bool', node)
+
+
 class BooleanObfuscator(ast.NodeTransformer):
     """
-    AST transformer that obfuscates boolean expressions:
-    - True/False literals → complex equivalent expressions
-    - bool() calls → obfuscated versions
-    - Logical operators (and, or, not) → equivalent complex forms
-    - Comparison results → wrapped in obfuscated expressions
+    AST transformer that obfuscates boolean expressions using bitwise operations.
+    Every obfuscation point applies a combination of 2 independent transforms.
     """
 
     def __init__(self, name_gen_settings='english'):
         self.name_gen_settings = name_gen_settings
         self.obf_count = 0
         self.helper_func_name = generate_random_name("_", name_gen_settings)
-        self.call_depth = 0  # Track call nesting depth
+        self.call_depth = 0
+        self.helper_injected = False
+        self.assign_depth = 0
+
+    # ------------------------------------------------------------------
+    # Primitive True/False building blocks (bitwise only, no not-chains)
+    # ------------------------------------------------------------------
+
+    def _true_atoms(self):
+        """Return pool of simple bitwise True atoms (used in combinations)."""
+        a = random.randint(1, 0xFFFF)
+        b = random.randint(1, 0xFFFF)
+        k = random.randint(1, 7)
+        return [
+            # (a ^ a) == 0
+            _cmp(_binop(_bconst(a), ast.BitXor(), _bconst(a)), ast.Eq(), _bconst(0)),
+            # (a & a) == a
+            _cmp(_binop(_bconst(a), ast.BitAnd(), _bconst(a)), ast.Eq(), _bconst(a)),
+            # (a | 0) == a
+            _cmp(_binop(_bconst(a), ast.BitOr(), _bconst(0)), ast.Eq(), _bconst(a)),
+            # ~(~a) == a
+            _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _bconst(a))), ast.Eq(), _bconst(a)),
+            # (a << k) >> k == a
+            _cmp(
+                _binop(_binop(_bconst(a), ast.LShift(), _bconst(k)), ast.RShift(), _bconst(k)),
+                ast.Eq(), _bconst(a)
+            ),
+            # ((a ^ b) ^ b) == a
+            _cmp(
+                _binop(_binop(_bconst(a), ast.BitXor(), _bconst(b)), ast.BitXor(), _bconst(b)),
+                ast.Eq(), _bconst(a)
+            ),
+            # (a & ~0) == a  (~0 == -1)
+            _cmp(_binop(_bconst(a), ast.BitAnd(), _unary(ast.Invert(), _bconst(0))), ast.Eq(), _bconst(a)),
+            # bool(a & a)
+            _bool(_binop(_bconst(a), ast.BitAnd(), _bconst(a))),
+            # ~(-1) == 0
+            _cmp(_unary(ast.Invert(), _bconst(-1)), ast.Eq(), _bconst(0)),
+            # (1 << k) >> k == 1
+            _cmp(
+                _binop(_binop(_bconst(1), ast.LShift(), _bconst(k)), ast.RShift(), _bconst(k)),
+                ast.Eq(), _bconst(1)
+            ),
+        ]
+
+    def _false_atoms(self):
+        """Return pool of simple bitwise False atoms."""
+        a = random.randint(2, 0xFFFF)
+        b = random.randint(1, 0xFFFF)
+        k = random.randint(1, 7)
+        return [
+            # (~a & a) != 0  → always 0, so False
+            _cmp(_binop(_unary(ast.Invert(), _bconst(a)), ast.BitAnd(), _bconst(a)), ast.NotEq(), _bconst(0)),
+            # (a & 0) != 0
+            _cmp(_binop(_bconst(a), ast.BitAnd(), _bconst(0)), ast.NotEq(), _bconst(0)),
+            # (a ^ a) != 0
+            _cmp(_binop(_bconst(a), ast.BitXor(), _bconst(a)), ast.NotEq(), _bconst(0)),
+            # ((a ^ b) ^ b) != a
+            _cmp(
+                _binop(_binop(_bconst(a), ast.BitXor(), _bconst(b)), ast.BitXor(), _bconst(b)),
+                ast.NotEq(), _bconst(a)
+            ),
+            # (a << k) == a  (k >= 1 so always False)
+            _cmp(_binop(_bconst(a), ast.LShift(), _bconst(k)), ast.Eq(), _bconst(a)),
+            # ~(~0) != 0  → ~(~0)=0, False
+            _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _bconst(0))), ast.NotEq(), _bconst(0)),
+            # bool(a & 0)  is True
+            _cmp(_bool(_binop(_bconst(a), ast.BitAnd(), _bconst(0))), ast.Is(), _bconst(True)),
+            # ~(~a) != a
+            _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _bconst(a))), ast.NotEq(), _bconst(a)),
+        ]
+
+    # ------------------------------------------------------------------
+    # Combined True/False generators (atoms joined with `and`/`or`)
+    # ------------------------------------------------------------------
 
     def _generate_true_expr(self):
-        """Generate expression that always evaluates to True."""
-        exprs = [
-            # Mathematical identities
-            ast.Compare(
-                left=ast.Constant(1),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(1)]
-            ),
-            # x == x
-            ast.Compare(
-                left=ast.Name(id='len', ctx=ast.Load()),
-                ops=[ast.Is()],
-                comparators=[ast.Name(id='len', ctx=ast.Load())]
-            ),
-            # x - x == 0
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.Constant(42),
-                    op=ast.Sub(),
-                    right=ast.Constant(42)
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(0)]
-            ),
-            # x | 0 == x
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.Constant(1337),
-                    op=ast.BitOr(),
-                    right=ast.Constant(0)
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(1337)]
-            ),
-            # len("") == 0
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='len', ctx=ast.Load()),
-                    args=[ast.Constant("")],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(0)]
-            ),
-            # bool(1) is True
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='bool', ctx=ast.Load()),
-                    args=[ast.Constant(1)],
-                    keywords=[]
-                ),
-                ops=[ast.Is()],
-                comparators=[ast.Constant(True)]
-            ),
-            # pow(x, 0) == 1
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='pow', ctx=ast.Load()),
-                    args=[ast.Constant(7), ast.Constant(0)],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(1)]
-            ),
-            # (x ^ y) ^ y == x
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.BinOp(
-                        left=ast.Constant(0x12345678),
-                        op=ast.BitXor(),
-                        right=ast.Constant(0xABCDEF00)
-                    ),
-                    op=ast.BitXor(),
-                    right=ast.Constant(0xABCDEF00)
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(0x12345678)]
-            ),
-            # chr(ord('A')) == 'A'
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='chr', ctx=ast.Load()),
-                    args=[ast.Call(
-                        func=ast.Name(id='ord', ctx=ast.Load()),
-                        args=[ast.Constant("A")],
-                        keywords=[]
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant("A")]
-            ),
-            # sum([1,2,3]) == 6
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='sum', ctx=ast.Load()),
-                    args=[ast.List(
-                        elts=[ast.Constant(1), ast.Constant(2), ast.Constant(3)],
-                        ctx=ast.Load()
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(6)]
-            ),
-            # all([True, True, True]) == True
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='all', ctx=ast.Load()),
-                    args=[ast.List(
-                        elts=[ast.Constant(True), ast.Constant(True), ast.Constant(True)],
-                        ctx=ast.Load()
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.Is()],
-                comparators=[ast.Constant(True)]
-            ),
-            # not False
-            ast.UnaryOp(
-                op=ast.Not(),
-                operand=ast.Constant(False)
-            ),
-        ]
-        return random.choice(exprs)
+        """
+        Combine 2 independent True atoms with `and`.
+        Result is always True, looks complex.
+        """
+        atoms = self._true_atoms()
+        a1, a2 = random.sample(atoms, 2)
+        return ast.BoolOp(op=ast.And(), values=[a1, a2])
 
     def _generate_false_expr(self):
-        """Generate expression that always evaluates to False."""
-        exprs = [
-            # x != x
-            ast.Compare(
-                left=ast.Name(id='len', ctx=ast.Load()),
-                ops=[ast.IsNot()],
-                comparators=[ast.Name(id='len', ctx=ast.Load())]
-            ),
-            # 1 == 0
-            ast.Compare(
-                left=ast.Constant(1),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(0)]
-            ),
-            # x - x != 0
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.Constant(42),
-                    op=ast.Sub(),
-                    right=ast.Constant(42)
-                ),
-                ops=[ast.NotEq()],
-                comparators=[ast.Constant(0)]
-            ),
-            # len("") != 0
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='len', ctx=ast.Load()),
-                    args=[ast.Constant("")],
-                    keywords=[]
-                ),
-                ops=[ast.NotEq()],
-                comparators=[ast.Constant(0)]
-            ),
-            # bool(0) is True (false statement)
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='bool', ctx=ast.Load()),
-                    args=[ast.Constant(0)],
-                    keywords=[]
-                ),
-                ops=[ast.Is()],
-                comparators=[ast.Constant(True)]
-            ),
-            # pow(x, 1) != x
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='pow', ctx=ast.Load()),
-                    args=[ast.Constant(42), ast.Constant(1)],
-                    keywords=[]
-                ),
-                ops=[ast.NotEq()],
-                comparators=[ast.Constant(42)]
-            ),
-            # "abc" in "def"
-            ast.Compare(
-                left=ast.Constant("abc"),
-                ops=[ast.In()],
-                comparators=[ast.Constant("def")]
-            ),
-            # sum([1,2,3]) != 6
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='sum', ctx=ast.Load()),
-                    args=[ast.List(
-                        elts=[ast.Constant(1), ast.Constant(2), ast.Constant(3)],
-                        ctx=ast.Load()
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.NotEq()],
-                comparators=[ast.Constant(6)]
-            ),
-            # all([True, False, True]) == True
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='all', ctx=ast.Load()),
-                    args=[ast.List(
-                        elts=[ast.Constant(True), ast.Constant(False), ast.Constant(True)],
-                        ctx=ast.Load()
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.Is()],
-                comparators=[ast.Constant(True)]
-            ),
-            # not True
-            ast.UnaryOp(
-                op=ast.Not(),
-                operand=ast.Constant(True)
-            ),
+        """
+        Combine 2 independent False atoms with `or`.
+        Result is always False, looks complex.
+        """
+        atoms = self._false_atoms()
+        a1, a2 = random.sample(atoms, 2)
+        return ast.BoolOp(op=ast.Or(), values=[a1, a2])
+
+    # ------------------------------------------------------------------
+    # Chain combinator — applies exactly 2 different transforms to node
+    # ------------------------------------------------------------------
+
+    # Single-step transforms that preserve boolean semantics:
+    #   each returns (transformed_node)
+    # They are designed to be composable.
+
+    def _t_xor0(self, node):
+        """bool(bool(x) ^ 0) — bitwise XOR identity."""
+        return _bool(_binop(_bool(node), ast.BitXor(), _bconst(0)))
+
+    def _t_or0(self, node):
+        """bool(bool(x) | 0) — bitwise OR identity."""
+        return _bool(_binop(_bool(node), ast.BitOr(), _bconst(0)))
+
+    def _t_and_neg1(self, node):
+        """bool(bool(x) & ~0) — bitwise AND identity (~0 = -1)."""
+        return _bool(_binop(_bool(node), ast.BitAnd(), _unary(ast.Invert(), _bconst(0))))
+
+    def _t_and_true(self, node):
+        """x and (true_expr) — append True via and."""
+        return ast.BoolOp(op=ast.And(), values=[node, self._generate_true_expr()])
+
+    def _t_or_false(self, node):
+        """x or (false_expr) — append False via or."""
+        return ast.BoolOp(op=ast.Or(), values=[node, self._generate_false_expr()])
+
+    def _t_cmp_is_true(self, node):
+        """bool(x) is True — explicit is-comparison."""
+        return _cmp(_bool(node), ast.Is(), _bconst(True))
+
+    def _t_shift_round(self, node):
+        """bool((bool(x) << 3) >> 3) — shift round-trip."""
+        k = random.randint(1, 5)
+        inner = _binop(_binop(_bool(node), ast.LShift(), _bconst(k)), ast.RShift(), _bconst(k))
+        return _bool(inner)
+
+    def _t_xor_flip_back(self, node):
+        """bool(bool(x) ^ 0xFF ^ 0xFF) — XOR cancel."""
+        mask = random.randint(1, 0xFF)
+        inner = _binop(_binop(_bool(node), ast.BitXor(), _bconst(mask)), ast.BitXor(), _bconst(mask))
+        return _bool(inner)
+
+    def _chain_obf(self, node):
+        """
+        Apply exactly 2 distinct transforms chosen at random.
+        Guarantees no repeated transform in the chain.
+        """
+        pool = [
+            self._t_xor0,
+            self._t_or0,
+            self._t_and_neg1,
+            self._t_and_true,
+            self._t_or_false,
+            self._t_cmp_is_true,
+            self._t_shift_round,
+            self._t_xor_flip_back,
         ]
-        return random.choice(exprs)
+        t1, t2 = random.sample(pool, 2)
+        return t2(t1(node))
+
+    # ------------------------------------------------------------------
+    # Visitors
+    # ------------------------------------------------------------------
 
     def visit_Constant(self, node):
-        """Obfuscate True/False literals, but not inside call arguments."""
-        # Don't obfuscate constants inside function call arguments
-        # This prevents breaking encoded string decoder calls
-        if self.call_depth > 0:
+        if self.call_depth > 0 or self.assign_depth > 0:
             return node
-            
         if node.value is True:
             self.obf_count += 1
             return self._generate_true_expr()
@@ -260,7 +217,6 @@ class BooleanObfuscator(ast.NodeTransformer):
         return node
 
     def visit_NameConstant(self, node):
-        """Handle True/False for older Python versions."""
         if node.value is True:
             self.obf_count += 1
             return self._generate_true_expr()
@@ -269,127 +225,173 @@ class BooleanObfuscator(ast.NodeTransformer):
             return self._generate_false_expr()
         return node
 
+    def visit_Assign(self, node):
+        self.assign_depth += 1
+        node.value = self.visit(node.value)
+        self.assign_depth -= 1
+        node.targets = [self.visit(t) for t in node.targets]
+        return node
+
     def visit_UnaryOp(self, node):
-        """Obfuscate 'not' operator."""
+        """Obfuscate 'not x' with combined bitwise transforms — no not-chains."""
         if isinstance(node.op, ast.Not):
-            # Wrap in double negation or transform
             self.obf_count += 1
-            # not x → (x is False) or (not x) with obfuscated operand
-            return ast.UnaryOp(
-                op=ast.Not(),
-                operand=self.generic_visit(node.operand)
-            )
+            operand = self.generic_visit(node.operand)
+            # Core not-equivalents (bitwise only, no not-spam):
+            #   bool(bool(x) ^ 1)     — XOR flips the bit
+            #   (bool(x) ^ 1) == 1    — XOR then compare
+            #   bool(~bool(x) & 1)    — invert then mask LSB
+            transform = random.choice(['xor1', 'xor1_cmp', 'invert_lsb'])
+
+            if transform == 'xor1':
+                core = _bool(_binop(_bool(operand), ast.BitXor(), _bconst(1)))
+            elif transform == 'xor1_cmp':
+                core = _cmp(_binop(_bool(operand), ast.BitXor(), _bconst(1)), ast.Eq(), _bconst(1))
+            else:  # invert_lsb
+                # ~bool(x) & 1  picks the flipped LSB (0 or 1)
+                core = _bool(_binop(_unary(ast.Invert(), _bool(operand)), ast.BitAnd(), _bconst(1)))
+
+            # Then wrap in one additional bitwise identity to add noise
+            wrapper = random.choice([self._t_xor0, self._t_or0, self._t_and_neg1])
+            return wrapper(core)
+
         return self.generic_visit(node)
 
     def visit_BoolOp(self, node):
-        """Obfuscate 'and'/'or' operations."""
-        # Visit children first
+        """Obfuscate and/or by combining demorgan + bitwise noise."""
         node = self.generic_visit(node)
-        
-        # Sometimes wrap in additional boolean logic
-        if random.random() < 0.3:
-            self.obf_count += 1
-            if isinstance(node.op, ast.And):
-                # (a and b) → (a and b) and (True)
+
+        transform = random.choice(['identity', 'demorgan', 'distribute', 'nested'])
+
+        if isinstance(node.op, ast.And):
+            if transform == 'identity':
+                # (a and b)  →  chain_obf(a and b and true_expr)
+                self.obf_count += 1
                 node.values.append(self._generate_true_expr())
-            elif isinstance(node.op, ast.Or):
-                # (a or b) → (a or b) or (False)
+                return self._chain_obf(node)
+            elif transform == 'demorgan':
+                # not (not a or not b)
+                self.obf_count += 1
+                negated = [
+                    _bconst(not v.value) if isinstance(v, ast.Constant) and v.value in (True, False)
+                    else _unary(ast.Not(), v)
+                    for v in node.values
+                ]
+                core = _unary(ast.Not(), ast.BoolOp(op=ast.Or(), values=negated))
+                return self._t_xor0(core)
+            elif transform == 'distribute':
+                self.obf_count += 1
+                node.values = [
+                    ast.BoolOp(op=ast.And(), values=[v, self._generate_true_expr()])
+                    for v in node.values
+                ]
+            else:  # nested
+                if len(node.values) >= 2:
+                    self.obf_count += 1
+                    last = node.values[-1]
+                    node.values[-1] = ast.IfExp(
+                        test=last,
+                        body=self._generate_true_expr(),
+                        orelse=self._generate_false_expr()
+                    )
+
+        elif isinstance(node.op, ast.Or):
+            if transform == 'identity':
+                self.obf_count += 1
                 node.values.append(self._generate_false_expr())
-        
+                return self._chain_obf(node)
+            elif transform == 'demorgan':
+                # not (not a and not b)
+                self.obf_count += 1
+                negated = [
+                    _bconst(not v.value) if isinstance(v, ast.Constant) and v.value in (True, False)
+                    else _unary(ast.Not(), v)
+                    for v in node.values
+                ]
+                core = _unary(ast.Not(), ast.BoolOp(op=ast.And(), values=negated))
+                return self._t_xor0(core)
+            elif transform == 'distribute':
+                self.obf_count += 1
+                node.values = [
+                    ast.BoolOp(op=ast.Or(), values=[v, self._generate_false_expr()])
+                    for v in node.values
+                ]
+            else:  # nested
+                if len(node.values) >= 2:
+                    self.obf_count += 1
+                    last = node.values[-1]
+                    node.values[-1] = ast.IfExp(
+                        test=last,
+                        body=self._generate_true_expr(),
+                        orelse=self._generate_false_expr()
+                    )
+
         return node
 
     def visit_Compare(self, node):
-        """Obfuscate comparison results."""
-        # Visit children first
+        """Wrap comparison result in a 2-step bitwise chain."""
         node = self.generic_visit(node)
-        
-        # Sometimes wrap comparison in boolean identity
-        if random.random() < 0.3:
+
+        if random.random() < 0.65:
             self.obf_count += 1
-            # x == y → (x == y) == True
-            return ast.Compare(
-                left=node,
-                ops=[ast.Is()],
-                comparators=[ast.Constant(True)]
-            )
-        
+            return self._chain_obf(node)
+
         return node
 
     def visit_Call(self, node):
-        """Don't obfuscate inside call nodes to avoid breaking function calls."""
-        # Increase call depth to prevent obfuscation of constants in arguments
         self.call_depth += 1
-        
-        # Visit the function itself (may contain names to obfuscate)
         node.func = self.visit(node.func)
-        
-        # Don't visit arguments or keywords - they may contain constants/lists that shouldn't be obfuscated
         self.call_depth -= 1
         return node
 
     def visit_List(self, node):
-        """Don't obfuscate inside list literals."""
-        # Lists may contain keys for string decoder
         return node
 
     def visit_Tuple(self, node):
-        """Don't obfuscate inside tuple literals."""
         return node
 
     def visit_Dict(self, node):
-        """Don't obfuscate inside dict literals."""
         return node
 
     def visit_If(self, node):
-        """Obfuscate if condition."""
-        # Don't obfuscate inside call depth (e.g., inside decoder function)
         if self.call_depth > 0:
             return self.generic_visit(node)
-            
-        # Visit children first
-        node.test = self.visit(node.test)
 
-        # Sometimes wrap condition
-        if random.random() < 0.2:
-            self.obf_count += 1
-            # if x → if x and True
-            node.test = ast.BoolOp(
-                op=ast.And(),
-                values=[node.test, self._generate_true_expr()]
-            )
-        
-        # Visit body and orelse
-        node.body = [self.visit(stmt) for stmt in node.body]
-        node.orelse = [self.visit(stmt) for stmt in node.orelse]
-        
+        node.test = self.visit(node.test)
+        self.obf_count += 1
+        node.test = self._chain_obf(node.test)
+        node.body = [self.visit(s) for s in node.body]
+        node.orelse = [self.visit(s) for s in node.orelse]
         return node
 
     def visit_While(self, node):
-        """Obfuscate while condition."""
         node.test = self.visit(node.test)
-        
-        if random.random() < 0.2:
+        self.obf_count += 1
+        node.test = self._chain_obf(node.test)
+        node.body = [self.visit(s) for s in node.body]
+        node.orelse = [self.visit(s) for s in node.orelse]
+        return node
+
+    def visit_IfExp(self, node):
+        node.test = self.visit(node.test)
+        if random.random() < 0.5:
+            self.obf_count += 1
+            node.test = self._chain_obf(node.test)
+        node.body = self.visit(node.body)
+        node.orelse = self.visit(node.orelse)
+        return node
+
+    def visit_Assert(self, node):
+        node.test = self.visit(node.test)
+        if random.random() < 0.4:
             self.obf_count += 1
             node.test = ast.BoolOp(
                 op=ast.And(),
                 values=[node.test, self._generate_true_expr()]
             )
-        
-        node.body = [self.visit(stmt) for stmt in node.body]
-        node.orelse = [self.visit(stmt) for stmt in node.orelse]
-        
         return node
 
     def apply_obfuscation(self, code: str) -> str:
-        """
-        Apply boolean obfuscation to Python code.
-        
-        Args:
-            code: Python source code
-            
-        Returns:
-            Obfuscated code
-        """
         try:
             tree = ast.parse(code)
             obfuscated_tree = self.visit(tree)
@@ -400,21 +402,11 @@ class BooleanObfuscator(ast.NodeTransformer):
             return code
 
     def reset(self):
-        """Reset counter for new file."""
         self.obf_count = 0
         self.call_depth = 0
+        self.assign_depth = 0
 
 
 def obfuscate_booleans(code: str, name_gen_settings: str = 'english') -> str:
-    """
-    Obfuscate boolean expressions in Python code.
-    
-    Args:
-        code: Python source code
-        name_gen_settings: Character set for name generation
-        
-    Returns:
-        Obfuscated code
-    """
     obfuscator = BooleanObfuscator(name_gen_settings)
     return obfuscator.apply_obfuscation(code)
