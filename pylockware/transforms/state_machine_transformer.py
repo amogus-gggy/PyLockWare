@@ -1,12 +1,313 @@
 """
 State Machine Transformer for PyLockWare
-Transforms functions into state machines to obfuscate control flow
+Transforms functions into state machines to obfuscate control flow.
+State comparisons and assignments are obfuscated with bitwise operations.
 """
 import ast
 import random
-import string
 from pylockware.core.name_generator import generate_random_name
 
+
+# ---------------------------------------------------------------------------
+# AST helpers
+# ---------------------------------------------------------------------------
+
+def _c(v):
+    return ast.Constant(v)
+
+
+def _n(name):
+    return ast.Name(id=name, ctx=ast.Load())
+
+
+def _ns(name):
+    return ast.Name(id=name, ctx=ast.Store())
+
+
+def _binop(l, op, r):
+    return ast.BinOp(left=l, op=op, right=r)
+
+
+def _cmp(l, op, r):
+    return ast.Compare(left=l, ops=[op], comparators=[r])
+
+
+def _unary(op, operand):
+    return ast.UnaryOp(op=op, operand=operand)
+
+
+def _assign(target_name, value):
+    return ast.Assign(targets=[_ns(target_name)], value=value)
+
+
+def _call(name, *args):
+    return ast.Call(func=_n(name), args=list(args), keywords=[])
+
+
+# ---------------------------------------------------------------------------
+# Bitwise opaque predicate pools (always True / always False, bitwise only)
+# ---------------------------------------------------------------------------
+
+def _bitwise_true_predicates():
+    a = random.randint(1, 0xFFFF)
+    b = random.randint(1, 0xFFFF)
+    k = random.randint(1, 7)
+    mask = random.randint(1, 0xFFFFFF)
+    return [
+        # (a ^ a) == 0
+        _cmp(_binop(_c(a), ast.BitXor(), _c(a)), ast.Eq(), _c(0)),
+        # (a & a) == a
+        _cmp(_binop(_c(a), ast.BitAnd(), _c(a)), ast.Eq(), _c(a)),
+        # ~(~a) == a
+        _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _c(a))), ast.Eq(), _c(a)),
+        # (a << k) >> k == a
+        _cmp(
+            _binop(_binop(_c(a), ast.LShift(), _c(k)), ast.RShift(), _c(k)),
+            ast.Eq(), _c(a)
+        ),
+        # ((a ^ b) ^ b) == a
+        _cmp(
+            _binop(_binop(_c(a), ast.BitXor(), _c(b)), ast.BitXor(), _c(b)),
+            ast.Eq(), _c(a)
+        ),
+        # (a & ~0) == a   (~0 == -1)
+        _cmp(_binop(_c(a), ast.BitAnd(), _unary(ast.Invert(), _c(0))), ast.Eq(), _c(a)),
+        # (mask | ~mask) == -1
+        _cmp(
+            _binop(_c(mask), ast.BitOr(), _unary(ast.Invert(), _c(mask))),
+            ast.Eq(), _c(-1)
+        ),
+        # bool(a & a)  is  True
+        _cmp(_call('bool', _binop(_c(a), ast.BitAnd(), _c(a))), ast.Is(), _c(True)),
+        # ~(-1) == 0
+        _cmp(_unary(ast.Invert(), _c(-1)), ast.Eq(), _c(0)),
+    ]
+
+
+def _bitwise_false_predicates():
+    a = random.randint(2, 0xFFFF)
+    b = random.randint(1, 0xFFFF)
+    k = random.randint(1, 7)
+    return [
+        # (~a & a) != 0  → always 0, so False
+        _cmp(_binop(_unary(ast.Invert(), _c(a)), ast.BitAnd(), _c(a)), ast.NotEq(), _c(0)),
+        # (a & 0) != 0
+        _cmp(_binop(_c(a), ast.BitAnd(), _c(0)), ast.NotEq(), _c(0)),
+        # (a ^ a) != 0
+        _cmp(_binop(_c(a), ast.BitXor(), _c(a)), ast.NotEq(), _c(0)),
+        # (a << k) == a   (k>=1)
+        _cmp(_binop(_c(a), ast.LShift(), _c(k)), ast.Eq(), _c(a)),
+        # ~(~0) != 0  → 0 != 0 → False
+        _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _c(0))), ast.NotEq(), _c(0)),
+        # ((a ^ b) ^ b) != a  → always equal, so False
+        _cmp(
+            _binop(_binop(_c(a), ast.BitXor(), _c(b)), ast.BitXor(), _c(b)),
+            ast.NotEq(), _c(a)
+        ),
+        # ~(~a) != a  → always equal
+        _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _c(a))), ast.NotEq(), _c(a)),
+        # bool(a & 0)  is True  → False
+        _cmp(_call('bool', _binop(_c(a), ast.BitAnd(), _c(0))), ast.Is(), _c(True)),
+    ]
+
+
+def _rand_true():
+    return random.choice(_bitwise_true_predicates())
+
+
+def _rand_false():
+    return random.choice(_bitwise_false_predicates())
+
+
+# ---------------------------------------------------------------------------
+# Obfuscated state comparison / assignment builders
+# ---------------------------------------------------------------------------
+
+def _make_state_cmp(state_var, state_val):
+    """
+    Generate obfuscated comparison `state_var == state_val`.
+    Picks one of several bitwise-equivalent forms, then adds an opaque AND.
+    """
+    mask = random.randint(1, 0xFFFF)
+    k = random.randint(1, 6)
+
+    style = random.randint(0, 4)
+    if style == 0:
+        # (state ^ mask) == (state_val ^ mask)
+        core = _cmp(
+            _binop(_n(state_var), ast.BitXor(), _c(mask)),
+            ast.Eq(),
+            _c(state_val ^ mask)
+        )
+    elif style == 1:
+        # (state - state_val) == 0
+        core = _cmp(
+            _binop(_n(state_var), ast.Sub(), _c(state_val)),
+            ast.Eq(), _c(0)
+        )
+    elif style == 2:
+        # (state | 0) == state_val
+        core = _cmp(_binop(_n(state_var), ast.BitOr(), _c(0)), ast.Eq(), _c(state_val))
+    elif style == 3:
+        # (state & ~0) == state_val
+        core = _cmp(
+            _binop(_n(state_var), ast.BitAnd(), _unary(ast.Invert(), _c(0))),
+            ast.Eq(), _c(state_val)
+        )
+    else:
+        # bool(state ^ state_val) == False  (XOR == 0 when equal)
+        core = _cmp(
+            _call('bool', _binop(_n(state_var), ast.BitXor(), _c(state_val))),
+            ast.Eq(), _c(False)
+        )
+
+    # Combine with a True opaque predicate via `and`
+    return ast.BoolOp(op=ast.And(), values=[core, _rand_true()])
+
+
+def _make_state_neq_cmp(state_var, state_val):
+    """
+    Generate obfuscated comparison `state_var != state_val` for while-loop.
+    """
+    mask = random.randint(1, 0xFFFF)
+    style = random.randint(0, 3)
+
+    if style == 0:
+        # (state ^ mask) != (state_val ^ mask)
+        return _cmp(
+            _binop(_n(state_var), ast.BitXor(), _c(mask)),
+            ast.NotEq(),
+            _c(state_val ^ mask)
+        )
+    elif style == 1:
+        # (state - state_val) != 0
+        return _cmp(
+            _binop(_n(state_var), ast.Sub(), _c(state_val)),
+            ast.NotEq(), _c(0)
+        )
+    elif style == 2:
+        # bool(state ^ state_val)  (truthy when not equal)
+        return _call('bool', _binop(_n(state_var), ast.BitXor(), _c(state_val)))
+    else:
+        # (state | 0) != state_val
+        return _cmp(_binop(_n(state_var), ast.BitOr(), _c(0)), ast.NotEq(), _c(state_val))
+
+
+def _make_state_assign(state_var, state_val, initial=False):
+    """
+    Generate obfuscated state mutation `state_var → state_val`.
+    Returns a LIST of statements so callers must use extend().
+    Uses augmented assignments and multi-step mutations so the target
+    value is never written explicitly in a single plain assignment.
+
+    initial=True: variable is not yet defined, use only write-only forms.
+    """
+    # Styles that read the variable (require it already exists):
+    #   0 (state ^= state ^ K), 1 (state += K - state), 2 (state -= state - K),
+    #   3 (state ^= state; state |= K), 4 (state = (state & 0) | K),
+    #   5 (state ^= state; ...), 6 (state = (state ^ state) | K)
+    # Safe for initial (write-only):
+    #   7 = K ^ mask ^ mask, 8 = K | 0, 9 = K & ~0, 10 = (K<<k)>>k
+    if initial:
+        style = random.randint(7, 10)
+    else:
+        style = random.randint(0, 6)
+
+    sn = _n(state_var)  # load
+    ss = _ns(state_var)  # store
+
+    if style == 0:
+        # state ^= state ^ K   →   state = 0 ^ K = K
+        return [ast.AugAssign(
+            target=ast.Name(id=state_var, ctx=ast.Store()),
+            op=ast.BitXor(),
+            value=_binop(sn, ast.BitXor(), _c(state_val))
+        )]
+
+    elif style == 1:
+        # state += K - state   →   state = K
+        return [ast.AugAssign(
+            target=ast.Name(id=state_var, ctx=ast.Store()),
+            op=ast.Add(),
+            value=_binop(_c(state_val), ast.Sub(), sn)
+        )]
+
+    elif style == 2:
+        # state -= state - K   →   state = K
+        return [ast.AugAssign(
+            target=ast.Name(id=state_var, ctx=ast.Store()),
+            op=ast.Sub(),
+            value=_binop(sn, ast.Sub(), _c(state_val))
+        )]
+
+    elif style == 3:
+        # two-step: state ^= state  (→0)  then  state |= K
+        return [
+            ast.AugAssign(
+                target=ast.Name(id=state_var, ctx=ast.Store()),
+                op=ast.BitXor(),
+                value=sn
+            ),
+            ast.AugAssign(
+                target=ast.Name(id=state_var, ctx=ast.Store()),
+                op=ast.BitOr(),
+                value=_c(state_val)
+            ),
+        ]
+
+    elif style == 4:
+        # state = (state & 0) | K   — AND clears, OR sets
+        return [_assign(state_var,
+            _binop(_binop(sn, ast.BitAnd(), _c(0)), ast.BitOr(), _c(state_val))
+        )]
+
+    elif style == 5:
+        # three-step with mask:
+        #   state ^= state          (→ 0)
+        #   state ^= (K ^ mask)     (→ K ^ mask)
+        #   state ^= mask           (→ K)
+        mask = random.randint(1, 0xFFFF)
+        sv = ast.Name(id=state_var, ctx=ast.Store())
+        return [
+            ast.AugAssign(target=ast.Name(id=state_var, ctx=ast.Store()), op=ast.BitXor(), value=sn),
+            ast.AugAssign(target=ast.Name(id=state_var, ctx=ast.Store()), op=ast.BitXor(), value=_c(state_val ^ mask)),
+            ast.AugAssign(target=ast.Name(id=state_var, ctx=ast.Store()), op=ast.BitXor(), value=_c(mask)),
+        ]
+
+    elif style == 6:
+        # state = (state ^ state) | K  (inline zero-then-set)
+        return [_assign(state_var,
+            _binop(_binop(sn, ast.BitXor(), sn), ast.BitOr(), _c(state_val))
+        )]
+
+    elif style == 7:
+        # state = (K ^ mask) ^ mask
+        mask = random.randint(1, 0xFFFF)
+        return [_assign(state_var,
+            _binop(_binop(_c(state_val), ast.BitXor(), _c(mask)), ast.BitXor(), _c(mask))
+        )]
+
+    elif style == 8:
+        # state = K | 0
+        return [_assign(state_var, _binop(_c(state_val), ast.BitOr(), _c(0)))]
+
+    elif style == 9:
+        # state = K & ~0
+        return [_assign(state_var,
+            _binop(_c(state_val), ast.BitAnd(), _unary(ast.Invert(), _c(0)))
+        )]
+
+    else:  # 10
+        # state = (K << k) >> k
+        k = random.randint(1, 4)
+        return [_assign(state_var,
+            _binop(_binop(_c(state_val), ast.LShift(), _c(k)), ast.RShift(), _c(k))
+        )]
+
+
+# ---------------------------------------------------------------------------
+# Transformer
+# ---------------------------------------------------------------------------
 
 class StateMachineTransformer(ast.NodeTransformer):
     def __init__(self, name_gen_settings='english', add_junk_states=True):
@@ -15,18 +316,16 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.final_state = None
         self.name_gen_settings = name_gen_settings
         self.add_junk_states = add_junk_states
-        self.junk_states = []  # Список мусорных состояний
+        self.junk_states = []
 
     # -----------------------------
     # Utility
     # -----------------------------
 
     def _rand(self, prefix="_s"):
-        # Generate a random name with the specified prefix (or default "_s_") and the character set settings
         if prefix:
             return generate_random_name(prefix + "_", self.name_gen_settings)
         else:
-            # Generate a random name without a specific prefix but still with underscore
             return generate_random_name("_", self.name_gen_settings)
 
     def _contains_async(self, node):
@@ -46,8 +345,7 @@ class StateMachineTransformer(ast.NodeTransformer):
         if self.final_state:
             used_states.add(self.final_state)
 
-        for i in range(num_junk_states):
-            # Generate unique state value
+        for _ in range(num_junk_states):
             while True:
                 junk_state = random.randint(1000, 999999)
                 if junk_state not in used_states:
@@ -55,16 +353,11 @@ class StateMachineTransformer(ast.NodeTransformer):
                     self.junk_states.append(junk_state)
                     break
 
-            # Generate junk code block
             junk_block = self._generate_junk_code_block()
 
-            # Create if branch for junk state (always false condition)
+            # Use obfuscated state comparison for junk too
             junk_case = ast.If(
-                test=ast.Compare(
-                    left=ast.Name(id=self.state_var, ctx=ast.Load()),
-                    ops=[ast.Eq()],
-                    comparators=[ast.Constant(junk_state)],
-                ),
+                test=_make_state_cmp(self.state_var, junk_state),
                 body=junk_block,
                 orelse=[]
             )
@@ -73,523 +366,224 @@ class StateMachineTransformer(ast.NodeTransformer):
         return junk_cases
 
     def _generate_junk_code_block(self):
-        """Generate a block of junk code for fake states with opaque predicates."""
+        """Generate junk code block with bitwise opaque predicates."""
         junk_var = self._rand("")
-        
-        # Opaque predicates that always evaluate to True
-        opaque_true_predicates = [
-            # x == x
-            ast.Compare(
-                left=ast.Name(id='len', ctx=ast.Load()),
-                ops=[ast.Is()],
-                comparators=[ast.Name(id='len', ctx=ast.Load())]
-            ),
-            # x - x == 0
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.Constant(42),
-                    op=ast.Sub(),
-                    right=ast.Constant(42)
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(0)]
-            ),
-            # x | 0 == x
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.Constant(1337),
-                    op=ast.BitOr(),
-                    right=ast.Constant(0)
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(1337)]
-            ),
-            # (x * 2) / 2 == x
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.BinOp(
-                        left=ast.Constant(100),
-                        op=ast.Mult(),
-                        right=ast.Constant(2)
-                    ),
-                    op=ast.FloorDiv(),
-                    right=ast.Constant(2)
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(100)]
-            ),
-            # pow(x, 0) == 1
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='pow', ctx=ast.Load()),
-                    args=[ast.Constant(7), ast.Constant(0)],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(1)]
-            ),
-            # (x ^ y) ^ y == x
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.BinOp(
-                        left=ast.Constant(0x12345678),
-                        op=ast.BitXor(),
-                        right=ast.Constant(0xABCDEF00)
-                    ),
-                    op=ast.BitXor(),
-                    right=ast.Constant(0xABCDEF00)
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(0x12345678)]
-            ),
-            # chr(ord('A')) == 'A'
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='chr', ctx=ast.Load()),
-                    args=[ast.Call(
-                        func=ast.Name(id='ord', ctx=ast.Load()),
-                        args=[ast.Constant("A")],
-                        keywords=[]
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant("A")]
-            ),
-            # sum([1,2,3]) == 6
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='sum', ctx=ast.Load()),
-                    args=[ast.List(
-                        elts=[ast.Constant(1), ast.Constant(2), ast.Constant(3)],
-                        ctx=ast.Load()
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(6)]
-            ),
-            # abs(-42) == 42
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='abs', ctx=ast.Load()),
-                    args=[ast.UnaryOp(op=ast.USub(), operand=ast.Constant(42))],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(42)]
-            ),
-            # all([True, True, True]) == True
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='all', ctx=ast.Load()),
-                    args=[ast.List(
-                        elts=[ast.Constant(True), ast.Constant(True), ast.Constant(True)],
-                        ctx=ast.Load()
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.Is()],
-                comparators=[ast.Constant(True)]
-            ),
-        ]
-        
-        # Opaque predicates that always evaluate to False
-        opaque_false_predicates = [
-            # x != x
-            ast.Compare(
-                left=ast.Name(id='len', ctx=ast.Load()),
-                ops=[ast.IsNot()],
-                comparators=[ast.Name(id='len', ctx=ast.Load())]
-            ),
-            # 1 == 0
-            ast.Compare(
-                left=ast.Constant(1),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(0)]
-            ),
-            # x & (x+1) == 0 (false for most x)
-            ast.Compare(
-                left=ast.BinOp(
-                    left=ast.Constant(100),
-                    op=ast.BitAnd(),
-                    right=ast.BinOp(
-                        left=ast.Constant(100),
-                        op=ast.Add(),
-                        right=ast.Constant(1)
-                    )
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(0)]
-            ),
-            # pow(x, 1) != x
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='pow', ctx=ast.Load()),
-                    args=[ast.Constant(42), ast.Constant(1)],
-                    keywords=[]
-                ),
-                ops=[ast.NotEq()],
-                comparators=[ast.Constant(42)]
-            ),
-            # sum([1,2,3]) != 6
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='sum', ctx=ast.Load()),
-                    args=[ast.List(
-                        elts=[ast.Constant(1), ast.Constant(2), ast.Constant(3)],
-                        ctx=ast.Load()
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.NotEq()],
-                comparators=[ast.Constant(6)]
-            ),
-            # "abc" in "def"
-            ast.Compare(
-                left=ast.Constant("abc"),
-                ops=[ast.In()],
-                comparators=[ast.Constant("def")]
-            ),
-            # isinstance(42, str)
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='isinstance', ctx=ast.Load()),
-                    args=[ast.Constant(42), ast.Name(id='str', ctx=ast.Load())],
-                    keywords=[]
-                ),
-                ops=[ast.Is()],
-                comparators=[ast.Constant(True)]
-            ),
-            # len([1,2,3]) == 5
-            ast.Compare(
-                left=ast.Call(
-                    func=ast.Name(id='len', ctx=ast.Load()),
-                    args=[ast.List(
-                        elts=[ast.Constant(1), ast.Constant(2), ast.Constant(3)],
-                        ctx=ast.Load()
-                    )],
-                    keywords=[]
-                ),
-                ops=[ast.Eq()],
-                comparators=[ast.Constant(5)]
-            ),
-        ]
-        
+
+        true_preds = _bitwise_true_predicates()
+        false_preds = _bitwise_false_predicates()
+
         junk_statements = [
-            # Fake assignments with complex expressions
-            ast.Assign(
-                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                value=ast.BinOp(
-                    left=ast.BinOp(
-                        left=ast.Constant(random.randint(1, 100)),
-                        op=ast.Mult(),
-                        right=ast.Constant(random.randint(1, 100))
-                    ),
-                    op=ast.Add(),
-                    right=ast.Constant(random.randint(1, 100))
-                )
-            ),
-            # String concatenation
-            ast.Assign(
-                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                value=ast.BinOp(
-                    left=ast.Constant("junk_"),
-                    op=ast.Add(),
-                    right=ast.Constant("string_" + str(random.randint(0, 999)))
-                )
-            ),
-            # List comprehension
-            ast.Assign(
-                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                value=ast.ListComp(
-                    elt=ast.Constant(random.randint(0, 10)),
-                    generators=[ast.comprehension(
-                        target=ast.Name(id='_', ctx=ast.Store()),
-                        iter=ast.Call(
-                            func=ast.Name(id='range', ctx=ast.Load()),
-                            args=[ast.Constant(random.randint(1, 5))],
-                            keywords=[]
-                        ),
-                        ifs=[],
-                        is_async=0
-                    )]
-                )
-            ),
-            # Dict comprehension
-            ast.Assign(
-                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                value=ast.DictComp(
-                    key=ast.Name(id='x', ctx=ast.Load()),
-                    value=ast.BinOp(
-                        left=ast.Name(id='x', ctx=ast.Load()),
-                        op=ast.Mult(),
-                        right=ast.Constant(2)
-                    ),
-                    generators=[ast.comprehension(
-                        target=ast.Name(id='x', ctx=ast.Store()),
-                        iter=ast.Call(
-                            func=ast.Name(id='range', ctx=ast.Load()),
-                            args=[ast.Constant(random.randint(1, 5))],
-                            keywords=[]
-                        ),
-                        ifs=[],
-                        is_async=0
-                    )]
-                )
-            ),
-            # Fake if with opaque true predicate
-            ast.If(
-                test=random.choice(opaque_true_predicates),
-                body=[
-                    ast.Assign(
-                        targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                        value=ast.Constant(random.randint(1000, 9999))
-                    )
-                ],
-                orelse=[]
-            ),
-            # Fake if with opaque false predicate
-            ast.If(
-                test=random.choice(opaque_false_predicates),
-                body=[
-                    ast.Assign(
-                        targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                        value=ast.Constant(9999)
-                    )
-                ],
-                orelse=[]
-            ),
-            # Nested fake if
-            ast.If(
-                test=random.choice(opaque_true_predicates),
-                body=[
-                    ast.If(
-                        test=random.choice(opaque_false_predicates),
-                        body=[
-                            ast.Assign(
-                                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                                value=ast.Constant(0)
-                            )
-                        ],
-                        orelse=[]
-                    )
-                ],
-                orelse=[]
-            ),
-            # Expression statement with function call
-            ast.Expr(value=ast.Call(
-                func=ast.Name(id='str', ctx=ast.Load()),
-                args=[ast.Constant(random.randint(0, 10000))],
-                keywords=[]
+            # Fake bitwise assignment
+            _assign(junk_var, _binop(
+                _binop(_c(random.randint(1, 0xFFFF)), ast.BitXor(), _c(random.randint(1, 0xFFFF))),
+                ast.BitAnd(), _unary(ast.Invert(), _c(0))
             )),
-            # BoolOp combining opaque predicates
-            ast.Assign(
-                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                value=ast.BoolOp(
-                    op=ast.And(),
-                    values=[
-                        random.choice(opaque_true_predicates),
-                        random.choice(opaque_true_predicates)
-                    ]
-                )
+            # XOR double-cancel assignment
+            _assign(junk_var, _binop(
+                _binop(_c(random.randint(1, 0xFF)), ast.BitXor(), _c(random.randint(1, 0xFF))),
+                ast.BitXor(), _c(random.randint(1, 0xFF))
+            )),
+            # Shift round-trip
+            _assign(junk_var, _binop(
+                _binop(_c(random.randint(1, 0xFF)), ast.LShift(), _c(random.randint(1, 5))),
+                ast.RShift(), _c(random.randint(1, 5))
+            )),
+            # if true_pred: fake assign
+            ast.If(
+                test=random.choice(true_preds),
+                body=[_assign(junk_var, _c(random.randint(1000, 9999)))],
+                orelse=[]
             ),
-            ast.Assign(
-                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                value=ast.BoolOp(
-                    op=ast.Or(),
-                    values=[
-                        random.choice(opaque_false_predicates),
-                        random.choice(opaque_false_predicates)
-                    ]
-                )
+            # if false_pred: unreachable
+            ast.If(
+                test=random.choice(false_preds),
+                body=[_assign(junk_var, _c(0xDEAD))],
+                orelse=[]
             ),
+            # Nested: if true { if false { ... } }
+            ast.If(
+                test=random.choice(true_preds),
+                body=[ast.If(
+                    test=random.choice(false_preds),
+                    body=[_assign(junk_var, _c(0))],
+                    orelse=[]
+                )],
+                orelse=[]
+            ),
+            # BoolOp: true_pred and true_pred assignment
+            _assign(junk_var, ast.BoolOp(
+                op=ast.And(),
+                values=[random.choice(true_preds), random.choice(true_preds)]
+            )),
+            # BoolOp: false_pred or false_pred assignment
+            _assign(junk_var, ast.BoolOp(
+                op=ast.Or(),
+                values=[random.choice(false_preds), random.choice(false_preds)]
+            )),
+            # str() call dead expr
+            ast.Expr(value=_call('str', _c(random.randint(0, 10000)))),
         ]
-        # Return random subset of junk statements
-        num_statements = random.randint(3, 6)
-        return random.sample(junk_statements, min(num_statements, len(junk_statements)))
+
+        num = random.randint(3, 6)
+        return random.sample(junk_statements, min(num, len(junk_statements)))
+
+    def _opaque_guard(self):
+        """
+        Return an If node wrapping a True opaque predicate.
+        Used to guard real state bodies with an always-true condition
+        that makes static analysis harder.
+        """
+        # Combine two true predicates with AND for extra noise
+        t1, t2 = random.sample(_bitwise_true_predicates(), 2)
+        return ast.BoolOp(op=ast.And(), values=[t1, t2])
 
     # -----------------------------
     # Core
     # -----------------------------
 
     def visit_ClassDef(self, node):
-        """Явно обрабатываем класс - обфусцируем все методы внутри"""
-        print(f"[STATE_MACHINE] Processing class: {node.name}")
         new_body = []
         for item in node.body:
-            if isinstance(item, ast.FunctionDef):
-                # ПРАВИЛЬНО: используем self.visit, чтобы рекурсивно обработать вложенные узлы
-                new_body.append(self.visit(item))
-            elif isinstance(item, ast.ClassDef):
-                # ПРАВИЛЬНО: рекурсивно обрабатываем вложенные классы
+            if isinstance(item, (ast.FunctionDef, ast.ClassDef)):
                 new_body.append(self.visit(item))
             else:
-                # Атрибуты, docstrings и т.д.
                 new_body.append(self.generic_visit(item))
         node.body = new_body
         return node
 
     def visit_FunctionDef(self, node):
-        # Пропускаем только async
         if self._contains_async(node):
-            print(f"[STATE_MACHINE] Skipping async function: {node.name}")
             return self.generic_visit(node)
 
-        # Минимальный размер
         if len(node.body) < 1:
-            print(f"[STATE_MACHINE] Skipping function (empty body): {node.name}")
             return self.generic_visit(node)
 
         self.func_counter += 1
         old_state = self.state_var
-        # Use the name generator settings to create state and return variables without specific prefixes
         self.state_var = self._rand("")
         ret_var = self._rand("")
 
         is_generator = any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(node))
 
-        # Разбиваем тело на блоки
         blocks = self._split_into_blocks(node.body)
-
-        # Проверяем, можно ли развернуть одиночный цикл
         expanded_blocks, loop_stmt = self._expand_single_loop_body(blocks)
         is_expanded_loop = loop_stmt is not None
 
         if is_expanded_loop:
-            print(f"[STATE_MACHINE] Function '{node.name}': expanding single loop body ({len(loop_stmt.body)} statements) into {len(expanded_blocks)} blocks")
             blocks = expanded_blocks
 
-        print(f"[STATE_MACHINE] Function '{node.name}': {len(node.body)} statements, split into {len(blocks)} blocks")
-
         if len(blocks) <= 1 and not is_generator:
-            print(f"[STATE_MACHINE] Skipping function '{node.name}': only {len(blocks)} block(s) and not a generator")
             self.state_var = old_state
             return self.generic_visit(node)
 
-        # Генерируем случайные значения состояний для каждого блока
+        # Generate unique random state values
         unique_states = set()
         state_values = []
-
-        for i in range(len(blocks)):
-            # Генерируем случайное значение до тех пор, пока не найдем уникальное
+        for _ in range(len(blocks)):
             while True:
-                rand_state = random.randint(1000, 999999)  # Случайное число в диапазоне
-                if rand_state not in unique_states:
-                    unique_states.add(rand_state)
-                    state_values.append(rand_state)
+                s = random.randint(1000, 999999)
+                if s not in unique_states:
+                    unique_states.add(s)
+                    state_values.append(s)
                     break
 
-        # Создаем словарь соответствия: индекс блока -> случайное состояние
         self.block_to_state_map = dict(zip(range(len(blocks)), state_values))
-
-        # Также создаем обратный словарь: случайное состояние -> индекс блока
         self.state_to_block_map = dict(zip(state_values, range(len(blocks))))
 
-        print(f"[STATE_MACHINE] Function '{node.name}': state values: {state_values}")
         while True:
-            final_rand_state = random.randint(1000, 999999)
-            if final_rand_state not in unique_states:
-                self.final_state = final_rand_state
+            s = random.randint(1000, 999999)
+            if s not in unique_states:
+                self.final_state = s
                 break
 
-        # -----------------------------
-        # Генерация state machine
-        # -----------------------------
-
+        # Build function body
         new_body = []
 
-        # __state = случайное состояние первого блока
+        # state = obfuscated(initial_state)
         initial_state = self.block_to_state_map[0]
-        new_body.append(
-            ast.Assign(
-                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                value=ast.Constant(initial_state),
-            )
-        )
+        new_body.extend(_make_state_assign(self.state_var, initial_state, initial=True))
 
-        # __ret = None
         if not is_generator:
-            new_body.append(
-                ast.Assign(
-                    targets=[ast.Name(id=ret_var, ctx=ast.Store())],
-                    value=ast.Constant(None),
-                )
-            )
+            new_body.append(_assign(ret_var, _c(None)))
 
+        # Build shuffled if-cases
         cases = []
-
-        # Генерируем ветвления для каждого блока со случайными состояниями
-        # Перемешиваем порядок IF-ветвлений для усложнения анализа
         block_indices = list(range(len(blocks)))
         random.shuffle(block_indices)
 
         for idx in block_indices:
-            # Получаем случайное состояние для этого блока
             state = self.block_to_state_map[idx]
             block = blocks[idx]
-            case_body = self._process_block(block, idx, len(blocks), ret_var, is_generator, state, is_expanded_loop)
-
-            cases.append(
-                ast.If(
-                    test=ast.Compare(
-                        left=ast.Name(id=self.state_var, ctx=ast.Load()),
-                        ops=[ast.Eq()],
-                        comparators=[ast.Constant(state)],
-                    ),
-                    body=case_body,
-                    orelse=[],
-                )
+            case_body = self._process_block(
+                block, idx, len(blocks), ret_var, is_generator, state, is_expanded_loop
             )
 
-        # Добавляем мусорные состояния для запутывания анализа
+            # Wrap case body in opaque guard ~40% of the time
+            # (adds an always-true if around the real body to confuse CFG analysis)
+            if random.random() < 0.4 and case_body:
+                guarded_body = [ast.If(
+                    test=self._opaque_guard(),
+                    body=case_body,
+                    orelse=[]
+                )]
+                # Must still do the state transition — move last assign out of guard
+                # Only wrap non-transition statements
+                trans = [s for s in case_body if self._is_state_assign(s)]
+                body_stmts = [s for s in case_body if not self._is_state_assign(s)]
+                if body_stmts:
+                    guarded_body = [ast.If(
+                        test=self._opaque_guard(),
+                        body=body_stmts,
+                        orelse=[]
+                    )] + trans
+                    case_body = guarded_body
+
+            cases.append(ast.If(
+                test=_make_state_cmp(self.state_var, state),
+                body=case_body,
+                orelse=[]
+            ))
+
+        # Junk states
         if self.add_junk_states:
             junk_cases = self._generate_junk_states(num_junk_states=random.randint(2, 5))
-            cases.extend(junk_cases)
-            print(f"[STATE_MACHINE] Function '{node.name}': added {len(junk_cases)} junk states")
+            # Interleave junk cases randomly among real cases
+            for jc in junk_cases:
+                pos = random.randint(0, len(cases))
+                cases.insert(pos, jc)
 
-        print(f"[STATE_MACHINE] Function '{node.name}': IF statements order shuffled: {block_indices}")
-
-        # while state != FINAL (или while True для развёрнутого цикла)
+        # While loop with obfuscated condition
         if is_expanded_loop:
-            # Для бесконечного цикла используем while True
-            loop = ast.While(
-                test=ast.Constant(value=True),
-                body=cases,
-                orelse=[],
-            )
+            loop = ast.While(test=_c(True), body=cases, orelse=[])
         else:
             loop = ast.While(
-                test=ast.Compare(
-                    left=ast.Name(id=self.state_var, ctx=ast.Load()),
-                    ops=[ast.NotEq()],
-                    comparators=[ast.Constant(self.final_state)],
-                ),
+                test=_make_state_neq_cmp(self.state_var, self.final_state),
                 body=cases,
-                orelse=[],
+                orelse=[]
             )
 
         new_body.append(loop)
 
-        # return (только для не-развёрнутых циклов)
-        if is_expanded_loop:
-            # Для бесконечного цикла return не нужен (код после цикла недостижим)
-            pass
-        elif is_generator:
-            new_body.append(ast.Return(value=None))
-        else:
-            new_body.append(ast.Return(value=ast.Name(id=ret_var, ctx=ast.Load())))
+        if not is_expanded_loop:
+            if is_generator:
+                new_body.append(ast.Return(value=None))
+            else:
+                new_body.append(ast.Return(value=_n(ret_var)))
 
         node.body = new_body
-
-        # ВАЖНО: теперь НЕ вызываем generic_visit, т.к. мы полностью переписали тело
-        # Но всё равно нужно рекурсивно обработать вложенные узлы (например, вложенные функции)
-        # Это делает generic_visit для всей функции целиком, включая новое тело
         self.state_var = old_state
         return self.generic_visit(node)
 
+    def _is_state_assign(self, stmt):
+        """Check if stmt is an assignment to the state variable."""
+        return (
+            isinstance(stmt, ast.Assign) and
+            len(stmt.targets) == 1 and
+            isinstance(stmt.targets[0], ast.Name) and
+            stmt.targets[0].id == self.state_var
+        )
+
     def _split_into_blocks(self, body):
-        """Агрессивное разбиение на блоки"""
         blocks = []
         current_block = []
 
@@ -617,21 +611,14 @@ class StateMachineTransformer(ast.NodeTransformer):
         return blocks
 
     def _expand_single_loop_body(self, blocks):
-        """
-        Если функция состоит только из одного цикла, разворачиваем его тело
-        для применения state machine трансформации
-        """
         if len(blocks) == 1:
             stmt = blocks[0][0]
             if isinstance(stmt, (ast.While, ast.For)) and len(stmt.body) > 1:
-                # Разворачиваем тело цикла как отдельные блоки
                 expanded_blocks = self._split_into_blocks(stmt.body)
-                print(f"[STATE_MACHINE] Expanded loop body into {len(expanded_blocks)} blocks")
                 return expanded_blocks, stmt
         return blocks, None
 
     def _process_block(self, block, idx, total_blocks, ret_var, is_generator, state=None, is_expanded_loop=False):
-        """Обрабатывает блок"""
         case_body = []
 
         for stmt in block:
@@ -641,40 +628,17 @@ class StateMachineTransformer(ast.NodeTransformer):
                         case_body.append(ast.Expr(value=ast.Yield(value=stmt.value)))
                     case_body.append(ast.Return(value=None))
                 else:
-                    case_body.append(
-                        ast.Assign(
-                            targets=[ast.Name(id=ret_var, ctx=ast.Store())],
-                            value=stmt.value if stmt.value else ast.Constant(None),
-                        )
-                    )
+                    case_body.append(_assign(ret_var, stmt.value if stmt.value else _c(None)))
                     if is_expanded_loop:
-                        # Для бесконечного цикла переходим к первому блоку
-                        first_state = self.block_to_state_map[0]
-                        case_body.append(
-                            ast.Assign(
-                                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                                value=ast.Constant(first_state),
-                            )
-                        )
+                        case_body.extend(_make_state_assign(self.state_var, self.block_to_state_map[0]))
                     else:
-                        case_body.append(
-                            ast.Assign(
-                                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                                value=ast.Constant(self.final_state),
-                            )
-                        )
+                        case_body.extend(_make_state_assign(self.state_var, self.final_state))
 
             elif isinstance(stmt, (ast.Yield, ast.YieldFrom)):
                 case_body.append(stmt)
                 next_idx = idx + 1
                 if next_idx < total_blocks:
-                    next_state = self.block_to_state_map[next_idx]
-                    case_body.append(
-                        ast.Assign(
-                            targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                            value=ast.Constant(next_state),
-                        )
-                    )
+                    case_body.extend(_make_state_assign(self.state_var, self.block_to_state_map[next_idx]))
                     case_body.append(ast.Return(value=None))
 
             elif isinstance(stmt, (ast.For, ast.While)):
@@ -684,95 +648,48 @@ class StateMachineTransformer(ast.NodeTransformer):
                 case_body.extend(self._process_try(stmt, idx, total_blocks, is_expanded_loop))
 
             elif isinstance(stmt, (ast.FunctionDef, ast.ClassDef)):
-                # Вложенные определения - рекурсивно обрабатываем
-                if isinstance(stmt, ast.FunctionDef):
-                    case_body.append(self.visit(stmt))
-                else:
-                    case_body.append(self.visit(stmt))
+                case_body.append(self.visit(stmt))
 
             else:
                 case_body.append(stmt)
 
-        # переход к следующему состоянию (только если в теле нет других переходов)
-        has_explicit_transition = any(
-            isinstance(s, ast.Assign) and
-            isinstance(s.targets[0], ast.Name) and
-            s.targets[0].id == self.state_var
-            for s in case_body
-        )
+        # Add state transition if not already present
+        has_explicit_transition = any(self._is_state_assign(s) for s in case_body)
 
         if not has_explicit_transition:
             next_idx = idx + 1
             if next_idx < total_blocks:
-                next_state = self.block_to_state_map[next_idx]
-                case_body.append(
-                    ast.Assign(
-                        targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                        value=ast.Constant(next_state),
-                    )
-                )
+                next_val = self.block_to_state_map[next_idx]
+            elif is_expanded_loop:
+                next_val = self.block_to_state_map[0]
             else:
-                if is_expanded_loop:
-                    # Для бесконечного цикла переходим к первому блоку
-                    first_state = self.block_to_state_map[0]
-                    case_body.append(
-                        ast.Assign(
-                            targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                            value=ast.Constant(first_state),
-                        )
-                    )
-                else:
-                    case_body.append(
-                        ast.Assign(
-                            targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                            value=ast.Constant(self.final_state),
-                        )
-                    )
+                next_val = self.final_state
+            case_body.extend(_make_state_assign(self.state_var, next_val))
 
         return case_body
 
     def _process_loop(self, loop_node, current_idx, total_blocks, is_expanded_loop=False):
-        """Преобразует цикл"""
         body = [loop_node]
         next_idx = current_idx + 1
         if next_idx < total_blocks:
-            next_state = self.block_to_state_map[next_idx]
-            state_value = ast.Constant(next_state)
+            next_val = self.block_to_state_map[next_idx]
         elif is_expanded_loop:
-            # Для бесконечного цикла переходим к первому блоку
-            first_state = self.block_to_state_map[0]
-            state_value = ast.Constant(first_state)
+            next_val = self.block_to_state_map[0]
         else:
-            state_value = ast.Constant(self.final_state)
-
-        body.append(
-            ast.Assign(
-                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                value=state_value,
-            )
-        )
+            next_val = self.final_state
+        body.extend(_make_state_assign(self.state_var, next_val))
         return body
 
     def _process_try(self, try_node, current_idx, total_blocks, is_expanded_loop=False):
-        """Преобразует try-except"""
         next_idx = current_idx + 1
         body = [try_node]
         if next_idx < total_blocks:
-            next_state = self.block_to_state_map[next_idx]
-            state_value = ast.Constant(next_state)
+            next_val = self.block_to_state_map[next_idx]
         elif is_expanded_loop:
-            # Для бесконечного цикла переходим к первому блоку
-            first_state = self.block_to_state_map[0]
-            state_value = ast.Constant(first_state)
+            next_val = self.block_to_state_map[0]
         else:
-            state_value = ast.Constant(self.final_state)
-
-        body.append(
-            ast.Assign(
-                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                value=state_value,
-            )
-        )
+            next_val = self.final_state
+        body.extend(_make_state_assign(self.state_var, next_val))
         return body
 
     def apply_transformation(self, code):
