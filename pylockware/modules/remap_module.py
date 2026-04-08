@@ -312,6 +312,8 @@ class RemapModule(ModuleBase):
         try:
             tree = ast.parse(content)
             transformer = GlobalRenamer(self.remap_map)
+            # First pass: collect Pydantic classes to protect their fields
+            transformer._collect_pydantic_classes(tree)
             transformed_tree = transformer.visit(tree)
             ast.fix_missing_locations(transformed_tree)
 

@@ -18,7 +18,10 @@ class GlobalRenamer(ast.NodeTransformer):
             "kwargs",  # Common function parameters
             "_"
         }
-        
+
+        # Track classes that inherit from BaseModel (Pydantic)
+        self.pydantic_classes = set()
+
         # Add common built-in methods and attributes that shouldn't be renamed
         self.protected_names = self.builtin_names | {
             # Dictionary methods
@@ -144,10 +147,34 @@ class GlobalRenamer(ast.NodeTransformer):
         self.generic_visit(node)
         return node
 
+    def _collect_pydantic_classes(self, node):
+        """First pass: find all classes that inherit from BaseModel"""
+        for child in ast.walk(node):
+            if isinstance(child, ast.ClassDef):
+                for base in child.bases:
+                    if isinstance(base, ast.Name) and base.id == 'BaseModel':
+                        self.pydantic_classes.add(child.name)
+                    elif isinstance(base, ast.Attribute) and base.attr == 'BaseModel':
+                        self.pydantic_classes.add(child.name)
+
     def visit_ClassDef(self, node):
         # Rename class name if it's in the remap map
         if node.name in self.global_replacements:
             node.name = self.global_replacements[node.name]
+        
+        # If this is a Pydantic model, protect its field names from renaming
+        if node.name in self.pydantic_classes or any(
+            (isinstance(base, ast.Name) and base.id == 'BaseModel') or 
+            (isinstance(base, ast.Attribute) and base.attr == 'BaseModel')
+            for base in node.bases
+        ):
+            # Protect field names in this class
+            for item in node.body:
+                if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+                    field_name = item.target.id
+                    if field_name in self.global_replacements:
+                        del self.global_replacements[field_name]
+        
         # Visit the body of the class
         self.generic_visit(node)
         return node

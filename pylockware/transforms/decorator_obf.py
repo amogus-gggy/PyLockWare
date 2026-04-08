@@ -1,118 +1,127 @@
 """
 Decorator Obfuscation Transformer for PyLockWare
-Obfuscates decorator usage to make code harder to analyze
+Converts @decorator syntax to explicit assignment: func = decorator(func)
 """
 import ast
-import random
 from pylockware.core.name_generator import generate_random_name
 
 
 class DecoratorObfuscator(ast.NodeTransformer):
     """
-    Obfuscates decorators by wrapping them in lambda functions and using indirect calls.
-    This makes it harder to identify which decorators are being applied.
+    Converts @decorator syntax to explicit assignments to make code harder to analyze.
+    Example:
+        @dec1
+        @dec2(arg)
+        def func(): pass
+    becomes:
+        def func(): pass
+        func = dec1(dec2(arg)(func))
     """
 
     def __init__(self, name_gen_settings='english'):
         self.name_gen_settings = name_gen_settings
-        self.helper_vars = {}
 
-    def _create_decorator_wrapper(self, decorator_node):
+    def _build_decorated_assignment(self, target_name, decorator_list, is_async=False):
         """
-        Create an obfuscated decorator wrapper.
-        Instead of @decorator, uses a helper variable pattern.
+        Build assignment: func = dec1(dec2(arg)(func))
+        Decorators are applied bottom-up (last decorator is outermost).
         """
-        # For now, just return the decorator as-is to avoid issues
-        # The indirect strategy is safer here
-        return self._create_indirect_decorator(decorator_node)
+        # Start with the function reference
+        expr = ast.Name(id=target_name, ctx=ast.Load())
 
-    def _create_indirect_decorator(self, decorator_node):
-        """
-        Create indirect decorator reference using helper variable.
-        Only works for simple Name/Attribute decorators, not Call decorators.
-        """
-        # Only obfuscate simple decorator references (Name, Attribute)
-        # Skip Call decorators like @wraps(func), @lru_cache() etc.
-        # because their arguments may reference local-scope variables
-        if isinstance(decorator_node, (ast.Name, ast.Attribute)):
-            helper_name = generate_random_name("_d", self.name_gen_settings)
-            self.helper_vars[helper_name] = decorator_node
-            return ast.Name(id=helper_name, ctx=ast.Load())
-        
-        # Return original for complex decorators (Call, etc.)
-        return decorator_node
+        # Apply decorators from bottom to top (reverse order)
+        for dec in reversed(decorator_list):
+            if isinstance(dec, ast.Call):
+                # @decorator(args) -> decorator(args)(func)
+                expr = ast.Call(
+                    func=ast.Call(
+                        func=dec.func,
+                        args=dec.args,
+                        keywords=dec.keywords,
+                    ),
+                    args=[expr],
+                    keywords=[],
+                )
+            else:
+                # @decorator -> decorator(func)
+                expr = ast.Call(
+                    func=dec,
+                    args=[expr],
+                    keywords=[],
+                )
+
+        # func = decorated_expr
+        assignment = ast.Assign(
+            targets=[ast.Name(id=target_name, ctx=ast.Store())],
+            value=expr,
+        )
+        return assignment
 
     def visit_FunctionDef(self, node):
-        """Obfuscate decorators on function definitions."""
-        if node.decorator_list:
-            new_decorators = []
-            for decorator in node.decorator_list:
-                # Always use indirect strategy to avoid forward reference issues
-                new_decorators.append(self._create_indirect_decorator(decorator))
-
-            node.decorator_list = new_decorators
-
-        # Visit function body
+        """Convert decorators to assignment after function definition."""
+        # First process nested nodes
         self.generic_visit(node)
+        
+        if node.decorator_list:
+            # Build the assignment
+            assignment = self._build_decorated_assignment(node.name, node.decorator_list)
+            ast.fix_missing_locations(assignment)
+            # Store assignment to be added after the node by parent
+            # We'll add it as a sibling by appending to a wrapper
+            node._decorator_assignment = assignment
+            # Remove decorators from the function
+            node.decorator_list = []
+
         return node
 
     def visit_AsyncFunctionDef(self, node):
-        """Obfuscate decorators on async function definitions."""
-        if node.decorator_list:
-            new_decorators = []
-            for decorator in node.decorator_list:
-                # Always use indirect strategy to avoid forward reference issues
-                new_decorators.append(self._create_indirect_decorator(decorator))
-
-            node.decorator_list = new_decorators
-
-        # Visit function body
+        """Convert decorators to assignment after async function definition."""
         self.generic_visit(node)
+        
+        if node.decorator_list:
+            assignment = self._build_decorated_assignment(node.name, node.decorator_list, is_async=True)
+            ast.fix_missing_locations(assignment)
+            node._decorator_assignment = assignment
+            node.decorator_list = []
+
         return node
 
     def visit_ClassDef(self, node):
-        """Obfuscate decorators on class definitions."""
-        if node.decorator_list:
-            new_decorators = []
-            for decorator in node.decorator_list:
-                # Always use indirect strategy to avoid forward reference issues
-                new_decorators.append(self._create_indirect_decorator(decorator))
-
-            node.decorator_list = new_decorators
-
-        # Visit class body
+        """Convert decorators to assignment after class definition."""
         self.generic_visit(node)
+        
+        if node.decorator_list:
+            assignment = self._build_decorated_assignment(node.name, node.decorator_list)
+            ast.fix_missing_locations(assignment)
+            node._decorator_assignment = assignment
+            node.decorator_list = []
+
         return node
 
-    def get_helper_definitions(self):
-        """
-        Generate helper variable definitions for indirect decorators.
-        Returns Python code string with helper assignments.
-        """
-        if not self.helper_vars:
-            return ""
-
-        lines = []
-        for var_name, decorator_node in self.helper_vars.items():
-            # Convert decorator AST node to string
-            try:
-                decorator_str = ast.unparse(decorator_node)
-                lines.append(f"{var_name} = {decorator_str}")
-            except:
-                # If unparse fails, skip this one
-                pass
-
-        return "\n".join(lines)
+    def generic_visit(self, node):
+        """Override to inject decorator assignments after functions/classes."""
+        if not isinstance(node, ast.AST):
+            return node
+            
+        for field, old_value in list(ast.iter_fields(node)):
+            if isinstance(old_value, list):
+                new_value = []
+                for item in old_value:
+                    if isinstance(item, ast.AST):
+                        self.visit(item)
+                        new_value.append(item)
+                        # If item has decorator_assignment, add it after
+                        if hasattr(item, '_decorator_assignment'):
+                            new_value.append(item._decorator_assignment)
+                            delattr(item, '_decorator_assignment')
+                    else:
+                        new_value.append(item)
+                setattr(node, field, new_value)
+        return node
 
     def apply_transformation(self, code):
         """
         Apply decorator obfuscation to Python code.
-
-        Args:
-            code: Python source code as string
-
-        Returns:
-            Transformed code with obfuscated decorators
         """
         try:
             print(f"[DECORATOR_OBF] Starting transformation...")
@@ -120,23 +129,6 @@ class DecoratorObfuscator(ast.NodeTransformer):
             transformed_tree = self.visit(tree)
             ast.fix_missing_locations(transformed_tree)
             result = ast.unparse(transformed_tree)
-
-            # Add helper definitions after imports to avoid issues
-            helpers = self.get_helper_definitions()
-            if helpers:
-                # Find position after imports
-                lines = result.split('\n')
-                insert_pos = 0
-                for i, line in enumerate(lines):
-                    if line.startswith('import ') or line.startswith('from '):
-                        insert_pos = i + 1
-                    elif insert_pos > 0 and line.strip() == '':
-                        continue
-                    elif insert_pos > 0:
-                        break
-
-                # Insert helpers after imports
-                result = '\n'.join(lines[:insert_pos]) + '\n\n' + helpers + '\n' + '\n'.join(lines[insert_pos:])
 
             print(f"[DECORATOR_OBF] Transformation complete. Code changed: {result != code}")
             return result

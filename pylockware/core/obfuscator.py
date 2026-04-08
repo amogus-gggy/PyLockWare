@@ -186,10 +186,10 @@ class PyObfuscator:
             }
             self.module_manager.add_module(StateMachineModule(state_machine_config))
 
-        # Add decorator obfuscation (DISABLED - causes forward reference issues)
-        # if self.decorator_obf:
-        #     decorator_obf_config = {'name_gen': self.name_gen}
-        #     self.module_manager.add_module(DecoratorObfModule(decorator_obf_config))
+        # Decorator obfuscation - converts @decorator to explicit assignments
+        if self.decorator_obf:
+            decorator_obf_config = {'name_gen': self.name_gen}
+            self.module_manager.add_module(DecoratorObfModule(decorator_obf_config))
 
         # Add type annotation obfuscation (DISABLED - breaks type hints)
         # if self.type_annotation_obf:
