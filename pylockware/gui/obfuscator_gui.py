@@ -293,6 +293,15 @@ class ObfuscatorGUI(QMainWindow):
         junk_code_layout.addStretch()
         layout.addLayout(junk_code_layout)
 
+        # Decorator obfuscation option
+        decorator_obf_layout = QHBoxLayout()
+        self.decorator_obf_checkbox = QCheckBox("Decorator obfuscation")
+        self.decorator_obf_checkbox.setToolTip("Enable decorator obfuscation to convert @decorator syntax to explicit assignments")
+        decorator_obf_layout.addWidget(self.decorator_obf_checkbox)
+        decorator_obf_layout.addWidget(self.create_help_button("Decorator obfuscation converts @decorator syntax to explicit function = decorator(function) assignments, making code harder to analyze."))
+        decorator_obf_layout.addStretch()
+        layout.addLayout(decorator_obf_layout)
+
         layout.addStretch()
         tab.setLayout(layout)
         return tab
@@ -394,6 +403,7 @@ class ObfuscatorGUI(QMainWindow):
             'opaque_complexity': self._get_opaque_complexity(),
             'name_gen': self._get_name_gen_setting(),
             'disable_traceback': self.disable_traceback_checkbox.isChecked(),
+            'decorator_obf': self.decorator_obf_checkbox.isChecked(),
         }
 
         # Set anti-debug option
