@@ -22,6 +22,8 @@ from pylockware.modules.state_machine_module import StateMachineModule
 from pylockware.modules.nuitka_builder_module import NuitkaBuilderModule
 from pylockware.modules.builtin_dispatcher_module import BuiltinDispatcherModule
 from pylockware.modules.junk_code_module import JunkCodeModule
+from pylockware.modules.decorator_obf_module import DecoratorObfModule
+from pylockware.modules.type_annotation_obf_module import TypeAnnotationObfModule
 
 
 class PyObfuscator:
@@ -40,7 +42,8 @@ class PyObfuscator:
                  enable_nuitka: bool = False, nuitka_onefile: bool = True, nuitka_standalone: bool = True,
                  nuitka_output_name: str = None, nuitka_disable_console: bool = True, nuitka_icon: str = None,
                  nuitka_admin: bool = False, nuitka_plugins: List[str] = None, nuitka_extra_imports: List[str] = None,
-                 nuitka_options: List[str] = None, disable_traceback: bool = False):
+                 nuitka_options: List[str] = None, disable_traceback: bool = False,
+                 decorator_obf: bool = False, type_annotation_obf: bool = False):
         self.project_path = Path(project_path)
         self.entry_point = Path(entry_point)
         self.entry_function = entry_function
@@ -57,6 +60,8 @@ class PyObfuscator:
         self.opaque_complexity = opaque_complexity  # Opaque predicate complexity
         self.name_gen = name_gen  # Character set for name generation
         self.disable_traceback = disable_traceback  # Disable traceback by setting sys.tracebacklimit = 0
+        self.decorator_obf = decorator_obf  # Enable decorator obfuscation
+        self.type_annotation_obf = type_annotation_obf  # Enable type annotation obfuscation
 
         # Nuitka options
         self.enable_nuitka = enable_nuitka
@@ -163,6 +168,16 @@ class PyObfuscator:
             num_obf_config = {'name_gen': self.name_gen}
             self.module_manager.add_module(NumberObfModule(num_obf_config))
 
+        # Junk code BEFORE state machine - so state machine transforms the junk code too
+        if self.junk_code:
+            junk_code_config = {
+                'name_gen': self.name_gen,
+                'junk_density': self.junk_density,
+                'opaque_complexity': self.opaque_complexity
+            }
+            self.module_manager.add_module(JunkCodeModule(junk_code_config))
+
+        # State machine AFTER junk code - so it transforms functions with junk code included
         if self.state_machine:
             state_machine_config = {
                 'name_gen': self.name_gen,
@@ -171,17 +186,15 @@ class PyObfuscator:
             }
             self.module_manager.add_module(StateMachineModule(state_machine_config))
 
-        if self.builtin_dispatcher:
-            builtin_dispatcher_config = {'name_gen': self.name_gen}
-            self.module_manager.add_module(BuiltinDispatcherModule(builtin_dispatcher_config))
+        # Add decorator obfuscation (DISABLED - causes forward reference issues)
+        # if self.decorator_obf:
+        #     decorator_obf_config = {'name_gen': self.name_gen}
+        #     self.module_manager.add_module(DecoratorObfModule(decorator_obf_config))
 
-        if self.junk_code:
-            junk_code_config = {
-                'name_gen': self.name_gen,
-                'junk_density': self.junk_density,
-                'opaque_complexity': self.opaque_complexity
-            }
-            self.module_manager.add_module(JunkCodeModule(junk_code_config))
+        # Add type annotation obfuscation (DISABLED - breaks type hints)
+        # if self.type_annotation_obf:
+        #     type_annotation_obf_config = {'name_gen': self.name_gen}
+        #     self.module_manager.add_module(TypeAnnotationObfModule(type_annotation_obf_config))
 
         # Add disable traceback module BEFORE Nuitka (if enabled)
         # This needs to be done before Nuitka compiles the files

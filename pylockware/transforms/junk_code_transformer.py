@@ -581,24 +581,20 @@ class JunkCodeTransformer(ast.NodeTransformer):
     
     def visit_FunctionDef(self, node):
         """Add junk code to function definitions."""
-        # Skip async functions
-        if any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(node)):
-            return self.generic_visit(node)
-        
         # Randomly decide whether to add junk to this function
         if random.random() > self.junk_density:
             return self.generic_visit(node)
-        
+
         print(f"[JUNK_CODE] Adding junk code to function: {node.name}")
-        
+
         new_body = []
-        
+
         for stmt in node.body:
             # Add fake if branches before the statement
             if random.random() < 0.5:  # 50% chance
                 fake_branch = self._generate_fake_if_branch(is_true_branch=True)
                 new_body.append(fake_branch)
-            
+
             # Add elif chain sometimes
             if random.random() < 0.3:  # 30% chance
                 elif_branch = self._generate_fake_if_branch(is_true_branch=False)
@@ -606,24 +602,59 @@ class JunkCodeTransformer(ast.NodeTransformer):
                 main_if = self._generate_fake_if_branch(is_true_branch=True)
                 main_if.orelse = [elif_branch]
                 new_body.append(main_if)
-            
+
             # Add the original statement
             new_body.append(stmt)
-            
+
             # Add fake if branches after the statement
             if random.random() < 0.3:  # 30% chance
                 fake_branch = self._generate_fake_if_branch(is_true_branch=False)
                 new_body.append(fake_branch)
-        
+
         # Sometimes add junk at the end
         if random.random() < 0.4:
             new_body.append(self._generate_fake_if_branch(is_true_branch=True))
-        
+
         node.body = new_body
         return self.generic_visit(node)
-    
+
     def visit_AsyncFunctionDef(self, node):
-        """Skip async function definitions."""
+        """Add junk code to async function definitions with async-compatible junk."""
+        # Randomly decide whether to add junk to this function
+        if random.random() > self.junk_density:
+            return self.generic_visit(node)
+
+        print(f"[JUNK_CODE] Adding junk code to async function: {node.name}")
+
+        new_body = []
+
+        for stmt in node.body:
+            # Add fake if branches before the statement
+            if random.random() < 0.5:  # 50% chance
+                fake_branch = self._generate_fake_if_branch(is_true_branch=True)
+                new_body.append(fake_branch)
+
+            # Add elif chain sometimes
+            if random.random() < 0.3:  # 30% chance
+                elif_branch = self._generate_fake_if_branch(is_true_branch=False)
+                # Create if-elif chain
+                main_if = self._generate_fake_if_branch(is_true_branch=True)
+                main_if.orelse = [elif_branch]
+                new_body.append(main_if)
+
+            # Add the original statement
+            new_body.append(stmt)
+
+            # Add fake if branches after the statement
+            if random.random() < 0.3:  # 30% chance
+                fake_branch = self._generate_fake_if_branch(is_true_branch=False)
+                new_body.append(fake_branch)
+
+        # Sometimes add junk at the end
+        if random.random() < 0.4:
+            new_body.append(self._generate_fake_if_branch(is_true_branch=True))
+
+        node.body = new_body
         return self.generic_visit(node)
     
     def visit_ClassDef(self, node):
