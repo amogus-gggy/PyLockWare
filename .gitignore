@@ -10,3 +10,5 @@ antidebug_temp
 native_src\PyLockWareRuntime\.vs
 env
 nuitka_dist
+.idea
+venv

@@ -39,6 +39,7 @@ class StringProtectModule(ModuleBase):
                 # Skip anti-debug modules and the obfuscator script itself
                 if py_file.name not in ["anti_debug_injector.py", "anti_debug_injector_normal.py", "obfuscator.py", "str_prot.py"]:
                     try:
+                        protector.reset()
                         with open(py_file, 'r', encoding='utf-8') as f:
                             original_code = f.read()
 
@@ -50,9 +51,9 @@ class StringProtectModule(ModuleBase):
                             with open(py_file, 'w', encoding='utf-8') as f:
                                 f.write(protected_code)
 
-                            # Count protected strings by counting _protected_str_ occurrences
-                            protected_count = protected_code.count("_protected_str_")
-                            print(f"Protected {protected_count} strings in {py_file}")
+                        # Count protected strings by counting _protected_str_ occurrences
+                        protected_count = protector.string_counter
+                        print(f"Protected {protected_count} strings in {py_file}")
 
                     except Exception as e:
                         print(f"Error applying string protection to {py_file}: {e}")

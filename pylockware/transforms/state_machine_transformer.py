@@ -2,12 +2,316 @@
 State Machine Transformer for PyLockWare
 Transforms functions into state machines to obfuscate control flow
 Enhanced with async/await support
+Transforms functions into state machines to obfuscate control flow.
+State comparisons and assignments are obfuscated with bitwise operations.
 """
 import ast
 import random
-import string
 from pylockware.core.name_generator import generate_random_name
 
+
+# ---------------------------------------------------------------------------
+# AST helpers
+# ---------------------------------------------------------------------------
+
+def _c(v):
+    return ast.Constant(v)
+
+
+def _n(name):
+    return ast.Name(id=name, ctx=ast.Load())
+
+
+def _ns(name):
+    return ast.Name(id=name, ctx=ast.Store())
+
+
+def _binop(l, op, r):
+    return ast.BinOp(left=l, op=op, right=r)
+
+
+def _cmp(l, op, r):
+    return ast.Compare(left=l, ops=[op], comparators=[r])
+
+
+def _unary(op, operand):
+    return ast.UnaryOp(op=op, operand=operand)
+
+
+def _assign(target_name, value):
+    return ast.Assign(targets=[_ns(target_name)], value=value)
+
+
+def _call(name, *args):
+    return ast.Call(func=_n(name), args=list(args), keywords=[])
+
+
+# ---------------------------------------------------------------------------
+# Bitwise opaque predicate pools (always True / always False, bitwise only)
+# ---------------------------------------------------------------------------
+
+def _bitwise_true_predicates():
+    a = random.randint(1, 0xFFFF)
+    b = random.randint(1, 0xFFFF)
+    k = random.randint(1, 7)
+    mask = random.randint(1, 0xFFFFFF)
+    return [
+        # (a ^ a) == 0
+        _cmp(_binop(_c(a), ast.BitXor(), _c(a)), ast.Eq(), _c(0)),
+        # (a & a) == a
+        _cmp(_binop(_c(a), ast.BitAnd(), _c(a)), ast.Eq(), _c(a)),
+        # ~(~a) == a
+        _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _c(a))), ast.Eq(), _c(a)),
+        # (a << k) >> k == a
+        _cmp(
+            _binop(_binop(_c(a), ast.LShift(), _c(k)), ast.RShift(), _c(k)),
+            ast.Eq(), _c(a)
+        ),
+        # ((a ^ b) ^ b) == a
+        _cmp(
+            _binop(_binop(_c(a), ast.BitXor(), _c(b)), ast.BitXor(), _c(b)),
+            ast.Eq(), _c(a)
+        ),
+        # (a & ~0) == a   (~0 == -1)
+        _cmp(_binop(_c(a), ast.BitAnd(), _unary(ast.Invert(), _c(0))), ast.Eq(), _c(a)),
+        # (mask | ~mask) == -1
+        _cmp(
+            _binop(_c(mask), ast.BitOr(), _unary(ast.Invert(), _c(mask))),
+            ast.Eq(), _c(-1)
+        ),
+        # bool(a & a)  is  True
+        _cmp(_call('bool', _binop(_c(a), ast.BitAnd(), _c(a))), ast.Is(), _c(True)),
+        # ~(-1) == 0
+        _cmp(_unary(ast.Invert(), _c(-1)), ast.Eq(), _c(0)),
+    ]
+
+
+def _bitwise_false_predicates():
+    a = random.randint(2, 0xFFFF)
+    b = random.randint(1, 0xFFFF)
+    k = random.randint(1, 7)
+    return [
+        # (~a & a) != 0  → always 0, so False
+        _cmp(_binop(_unary(ast.Invert(), _c(a)), ast.BitAnd(), _c(a)), ast.NotEq(), _c(0)),
+        # (a & 0) != 0
+        _cmp(_binop(_c(a), ast.BitAnd(), _c(0)), ast.NotEq(), _c(0)),
+        # (a ^ a) != 0
+        _cmp(_binop(_c(a), ast.BitXor(), _c(a)), ast.NotEq(), _c(0)),
+        # (a << k) == a   (k>=1)
+        _cmp(_binop(_c(a), ast.LShift(), _c(k)), ast.Eq(), _c(a)),
+        # ~(~0) != 0  → 0 != 0 → False
+        _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _c(0))), ast.NotEq(), _c(0)),
+        # ((a ^ b) ^ b) != a  → always equal, so False
+        _cmp(
+            _binop(_binop(_c(a), ast.BitXor(), _c(b)), ast.BitXor(), _c(b)),
+            ast.NotEq(), _c(a)
+        ),
+        # ~(~a) != a  → always equal
+        _cmp(_unary(ast.Invert(), _unary(ast.Invert(), _c(a))), ast.NotEq(), _c(a)),
+        # bool(a & 0)  is True  → False
+        _cmp(_call('bool', _binop(_c(a), ast.BitAnd(), _c(0))), ast.Is(), _c(True)),
+    ]
+
+
+def _rand_true():
+    return random.choice(_bitwise_true_predicates())
+
+
+def _rand_false():
+    return random.choice(_bitwise_false_predicates())
+
+
+# ---------------------------------------------------------------------------
+# State encoding layer
+# ---------------------------------------------------------------------------
+# Each function gets a random encoding scheme and key.
+# The state variable ALWAYS stores the encoded value.
+# Comparisons first decode, then compare.
+# This means static analysis sees only ciphertext state values.
+
+ENC_XOR = 'xor'   # stored = plain ^ key;  decode: stored ^ key
+ENC_ADD = 'add'   # stored = plain + key;  decode: stored - key
+ENC_SUB = 'sub'   # stored = plain - key;  decode: stored + key
+
+
+def _encode_val(plain, enc, key):
+    """Compute the encoded integer to store for a given plain state value."""
+    if enc == ENC_XOR:
+        return plain ^ key
+    elif enc == ENC_ADD:
+        return plain + key
+    else:  # SUB
+        return plain - key
+
+
+def _decode_expr(state_var, enc, key):
+    """Return AST expression that decodes state_var back to plain value."""
+    sn = _n(state_var)
+    if enc == ENC_XOR:
+        return _binop(sn, ast.BitXor(), _c(key))
+    elif enc == ENC_ADD:
+        return _binop(sn, ast.Sub(), _c(key))
+    else:  # SUB
+        return _binop(sn, ast.Add(), _c(key))
+
+
+# ---------------------------------------------------------------------------
+# Obfuscated state comparison / assignment builders
+# ---------------------------------------------------------------------------
+
+def _make_state_cmp(state_var, state_val, enc, key):
+    """
+    Compare state_var (encoded) == state_val (plain).
+    Decodes state_var first, then compares using one of several forms.
+    Wraps with an opaque True predicate.
+    """
+    decoded = _decode_expr(state_var, enc, key)  # e.g. state ^ key
+    noise_mask = random.randint(1, 0xFFFF)
+
+    style = random.randint(0, 3)
+    if style == 0:
+        # (decode(state) ^ nm) == (plain ^ nm)
+        core = _cmp(
+            _binop(decoded, ast.BitXor(), _c(noise_mask)),
+            ast.Eq(),
+            _c(state_val ^ noise_mask)
+        )
+    elif style == 1:
+        # (decode(state) - plain) == 0
+        core = _cmp(_binop(decoded, ast.Sub(), _c(state_val)), ast.Eq(), _c(0))
+    elif style == 2:
+        # bool(decode(state) ^ plain) == False
+        core = _cmp(
+            _call('bool', _binop(decoded, ast.BitXor(), _c(state_val))),
+            ast.Eq(), _c(False)
+        )
+    else:
+        # (decode(state) & ~0) == plain
+        core = _cmp(
+            _binop(decoded, ast.BitAnd(), _unary(ast.Invert(), _c(0))),
+            ast.Eq(), _c(state_val)
+        )
+
+    return ast.BoolOp(op=ast.And(), values=[core, _rand_true()])
+
+
+def _make_state_neq_cmp(state_var, state_val, enc, key):
+    """
+    Compare state_var (encoded) != state_val (plain) — for while condition.
+    Decodes first.
+    """
+    decoded = _decode_expr(state_var, enc, key)
+    noise_mask = random.randint(1, 0xFFFF)
+
+    style = random.randint(0, 3)
+    if style == 0:
+        # (decode(state) ^ nm) != (plain ^ nm)
+        return _cmp(
+            _binop(decoded, ast.BitXor(), _c(noise_mask)),
+            ast.NotEq(),
+            _c(state_val ^ noise_mask)
+        )
+    elif style == 1:
+        # (decode(state) - plain) != 0
+        return _cmp(_binop(decoded, ast.Sub(), _c(state_val)), ast.NotEq(), _c(0))
+    elif style == 2:
+        # bool(decode(state) ^ plain)
+        return _call('bool', _binop(decoded, ast.BitXor(), _c(state_val)))
+    else:
+        # (decode(state) | 0) != plain
+        return _cmp(_binop(decoded, ast.BitOr(), _c(0)), ast.NotEq(), _c(state_val))
+
+
+def _make_state_assign(state_var, state_val, enc, key, initial=False):
+    """
+    Mutate state_var so it holds encode(state_val).
+    state_val is the PLAIN next state; we store encode(state_val, enc, key).
+
+    Returns a LIST of statements (callers must use extend()).
+    initial=True: variable not yet defined — use write-only forms only.
+    """
+    # The encoded value we actually want to store
+    K = _encode_val(state_val, enc, key)
+
+    sn = _n(state_var)
+
+    # Write-only styles (safe for initial): 7-10
+    # Read-then-write styles (require var defined): 0-6
+    if initial:
+        style = random.randint(7, 10)
+    else:
+        style = random.randint(0, 10)
+
+    if style == 0:
+        # state ^= state ^ K   →   state = K
+        return [ast.AugAssign(
+            target=ast.Name(id=state_var, ctx=ast.Store()),
+            op=ast.BitXor(),
+            value=_binop(sn, ast.BitXor(), _c(K))
+        )]
+
+    elif style == 1:
+        # state += K - state
+        return [ast.AugAssign(
+            target=ast.Name(id=state_var, ctx=ast.Store()),
+            op=ast.Add(),
+            value=_binop(_c(K), ast.Sub(), sn)
+        )]
+
+    elif style == 2:
+        # state -= state - K
+        return [ast.AugAssign(
+            target=ast.Name(id=state_var, ctx=ast.Store()),
+            op=ast.Sub(),
+            value=_binop(sn, ast.Sub(), _c(K))
+        )]
+
+    elif style == 3:
+        # state ^= state  (→0)  then  state |= K
+        return [
+            ast.AugAssign(target=ast.Name(id=state_var, ctx=ast.Store()), op=ast.BitXor(), value=sn),
+            ast.AugAssign(target=ast.Name(id=state_var, ctx=ast.Store()), op=ast.BitOr(), value=_c(K)),
+        ]
+
+    elif style == 4:
+        # state = (state & 0) | K
+        return [_assign(state_var, _binop(_binop(sn, ast.BitAnd(), _c(0)), ast.BitOr(), _c(K)))]
+
+    elif style == 5:
+        # three-step XOR: state^=state → state^=(K^m) → state^=m
+        m = random.randint(1, 0xFFFF)
+        return [
+            ast.AugAssign(target=ast.Name(id=state_var, ctx=ast.Store()), op=ast.BitXor(), value=sn),
+            ast.AugAssign(target=ast.Name(id=state_var, ctx=ast.Store()), op=ast.BitXor(), value=_c(K ^ m)),
+            ast.AugAssign(target=ast.Name(id=state_var, ctx=ast.Store()), op=ast.BitXor(), value=_c(m)),
+        ]
+
+    elif style == 6:
+        # state = (state ^ state) | K
+        return [_assign(state_var, _binop(_binop(sn, ast.BitXor(), sn), ast.BitOr(), _c(K)))]
+
+    elif style == 7:
+        # state = (K ^ m) ^ m
+        m = random.randint(1, 0xFFFF)
+        return [_assign(state_var, _binop(_binop(_c(K), ast.BitXor(), _c(m)), ast.BitXor(), _c(m)))]
+
+    elif style == 8:
+        # state = K | 0
+        return [_assign(state_var, _binop(_c(K), ast.BitOr(), _c(0)))]
+
+    elif style == 9:
+        # state = K & ~0
+        return [_assign(state_var, _binop(_c(K), ast.BitAnd(), _unary(ast.Invert(), _c(0))))]
+
+    else:  # 10
+        # state = (K << k) >> k
+        k = random.randint(1, 4)
+        return [_assign(state_var, _binop(_binop(_c(K), ast.LShift(), _c(k)), ast.RShift(), _c(k)))]
+
+
+# ---------------------------------------------------------------------------
+# Transformer
+# ---------------------------------------------------------------------------
 
 class StateMachineTransformer(ast.NodeTransformer):
     def __init__(self, name_gen_settings='english', add_junk_states=True):
@@ -19,6 +323,8 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.junk_states = []
         self.block_to_state_map = {}
         self.state_to_block_map = {}
+        self.state_enc = ENC_XOR
+        self.state_key = 0
 
     # -----------------------------
     # Utility
@@ -62,11 +368,7 @@ class StateMachineTransformer(ast.NodeTransformer):
             junk_block = self._generate_junk_code_block()
 
             junk_case = ast.If(
-                test=ast.Compare(
-                    left=ast.Name(id=self.state_var, ctx=ast.Load()),
-                    ops=[ast.Eq()],
-                    comparators=[ast.Constant(junk_state)],
-                ),
+                test=_make_state_cmp(self.state_var, junk_state, self.state_enc, self.state_key),
                 body=junk_block,
                 orelse=[]
             )
@@ -75,7 +377,7 @@ class StateMachineTransformer(ast.NodeTransformer):
         return junk_cases
 
     def _generate_junk_code_block(self):
-        """Generate a block of junk code for fake states with opaque predicates."""
+        """Generate junk code block with bitwise opaque predicates."""
         junk_var = self._rand("")
 
         # Opaque predicates that always evaluate to True
@@ -319,39 +621,22 @@ class StateMachineTransformer(ast.NodeTransformer):
                 )
             ),
             ast.If(
-                test=random.choice(opaque_true_predicates),
-                body=[
-                    ast.Assign(
-                        targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                        value=ast.Constant(random.randint(1000, 9999))
-                    )
-                ],
+                test=random.choice(true_preds),
+                body=[_assign(junk_var, _c(random.randint(1000, 9999)))],
                 orelse=[]
             ),
             ast.If(
-                test=random.choice(opaque_false_predicates),
-                body=[
-                    ast.Assign(
-                        targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                        value=ast.Constant(9999)
-                    )
-                ],
+                test=random.choice(false_preds),
+                body=[_assign(junk_var, _c(0xDEAD))],
                 orelse=[]
             ),
             ast.If(
-                test=random.choice(opaque_true_predicates),
-                body=[
-                    ast.If(
-                        test=random.choice(opaque_false_predicates),
-                        body=[
-                            ast.Assign(
-                                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
-                                value=ast.Constant(0)
-                            )
-                        ],
-                        orelse=[]
-                    )
-                ],
+                test=random.choice(true_preds),
+                body=[ast.If(
+                    test=random.choice(false_preds),
+                    body=[_assign(junk_var, _c(0))],
+                    orelse=[]
+                )],
                 orelse=[]
             ),
             ast.Expr(value=ast.Call(
@@ -561,7 +846,6 @@ class StateMachineTransformer(ast.NodeTransformer):
 
         # Minimum size check
         if len(node.body) < 1:
-            print(f"[STATE_MACHINE] Skipping function (empty body): {node.name}")
             return self.generic_visit(node)
 
         self.func_counter += 1
@@ -582,14 +866,12 @@ class StateMachineTransformer(ast.NodeTransformer):
         is_expanded_loop = loop_stmt is not None
 
         if is_expanded_loop:
-            print(f"[STATE_MACHINE] Function '{node.name}': expanding single loop body ({len(loop_stmt.body)} statements) into {len(expanded_blocks)} blocks")
             blocks = expanded_blocks
 
-        print(f"[STATE_MACHINE] Function '{node.name}': {len(node.body)} statements, split into {len(blocks)} blocks")
-
         if len(blocks) <= 1 and not is_generator:
-            print(f"[STATE_MACHINE] Skipping function '{node.name}': only {len(blocks)} block(s) and not a generator")
             self.state_var = old_state
+            self.state_enc = old_enc
+            self.state_key = old_key
             return self.generic_visit(node)
 
         # Generate random state values for each block
@@ -607,37 +889,27 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.block_to_state_map = dict(zip(range(len(blocks)), state_values))
         self.state_to_block_map = dict(zip(state_values, range(len(blocks))))
 
-        print(f"[STATE_MACHINE] Function '{node.name}': state values: {state_values}")
         while True:
-            final_rand_state = random.randint(1000, 999999)
-            if final_rand_state not in unique_states:
-                self.final_state = final_rand_state
+            s = random.randint(1000, 999999)
+            if s not in unique_states:
+                self.final_state = s
                 break
 
         # -----------------------------
         # Generate state machine
         # -----------------------------
 
+        # Build function body
         new_body = []
 
         # __state = initial state (first block)
         initial_state = self.block_to_state_map[0]
-        new_body.append(
-            ast.Assign(
-                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                value=ast.Constant(initial_state),
-            )
-        )
+        new_body.extend(_make_state_assign(self.state_var, initial_state, enc, key, initial=True))
 
-        # __ret = None
         if not is_generator:
-            new_body.append(
-                ast.Assign(
-                    targets=[ast.Name(id=ret_var, ctx=ast.Store())],
-                    value=ast.Constant(None),
-                )
-            )
+            new_body.append(_assign(ret_var, _c(None)))
 
+        # Build shuffled if-cases
         cases = []
 
         # Generate branches for each block with random states
@@ -647,27 +919,16 @@ class StateMachineTransformer(ast.NodeTransformer):
         for idx in block_indices:
             state = self.block_to_state_map[idx]
             block = blocks[idx]
-            case_body = self._process_block(block, idx, len(blocks), ret_var, is_generator, state, is_expanded_loop)
-
-            cases.append(
-                ast.If(
-                    test=ast.Compare(
-                        left=ast.Name(id=self.state_var, ctx=ast.Load()),
-                        ops=[ast.Eq()],
-                        comparators=[ast.Constant(state)],
-                    ),
-                    body=case_body,
-                    orelse=[],
-                )
+            case_body = self._process_block(
+                block, idx, len(blocks), ret_var, is_generator, state, is_expanded_loop
             )
 
         # Add junk states for obfuscation
         if self.add_junk_states:
             junk_cases = self._generate_junk_states(num_junk_states=random.randint(2, 5))
-            cases.extend(junk_cases)
-            print(f"[STATE_MACHINE] Function '{node.name}': added {len(junk_cases)} junk states")
-
-        print(f"[STATE_MACHINE] Function '{node.name}': IF statements order shuffled: {block_indices}")
+            for jc in junk_cases:
+                pos = random.randint(0, len(cases))
+                cases.insert(pos, jc)
 
         # while state != FINAL (or while True for expanded loop)
         if is_expanded_loop:
@@ -678,13 +939,9 @@ class StateMachineTransformer(ast.NodeTransformer):
             )
         else:
             loop = ast.While(
-                test=ast.Compare(
-                    left=ast.Name(id=self.state_var, ctx=ast.Load()),
-                    ops=[ast.NotEq()],
-                    comparators=[ast.Constant(self.final_state)],
-                ),
+                test=_make_state_neq_cmp(self.state_var, self.final_state, enc, key),
                 body=cases,
-                orelse=[],
+                orelse=[]
             )
 
         new_body.append(loop)
@@ -703,6 +960,15 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.state_to_block_map = old_state_to_block_map
         self.final_state = old_final_state
         return self.generic_visit(node)
+
+    def _is_state_assign(self, stmt):
+        """Check if stmt is an assignment to the state variable."""
+        return (
+            isinstance(stmt, ast.Assign) and
+            len(stmt.targets) == 1 and
+            isinstance(stmt.targets[0], ast.Name) and
+            stmt.targets[0].id == self.state_var
+        )
 
     def _split_into_blocks(self, body):
         """Aggressive splitting into blocks"""
@@ -741,7 +1007,6 @@ class StateMachineTransformer(ast.NodeTransformer):
             stmt = blocks[0][0]
             if isinstance(stmt, (ast.While, ast.For)) and len(stmt.body) > 1:
                 expanded_blocks = self._split_into_blocks(stmt.body)
-                print(f"[STATE_MACHINE] Expanded loop body into {len(expanded_blocks)} blocks")
                 return expanded_blocks, stmt
         return blocks, None
 
@@ -758,12 +1023,7 @@ class StateMachineTransformer(ast.NodeTransformer):
                         case_body.append(ast.Expr(value=ast.Yield(value=stmt.value)))
                     case_body.append(ast.Return(value=None))
                 else:
-                    case_body.append(
-                        ast.Assign(
-                            targets=[ast.Name(id=ret_var, ctx=ast.Store())],
-                            value=stmt.value if stmt.value else ast.Constant(None),
-                        )
-                    )
+                    case_body.append(_assign(ret_var, stmt.value if stmt.value else _c(None)))
                     if is_expanded_loop:
                         first_state = self.block_to_state_map[0]
                         case_body.append(
@@ -773,12 +1033,7 @@ class StateMachineTransformer(ast.NodeTransformer):
                             )
                         )
                     else:
-                        case_body.append(
-                            ast.Assign(
-                                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                                value=ast.Constant(self.final_state),
-                            )
-                        )
+                        case_body.extend(_make_state_assign(self.state_var, self.final_state, self.state_enc, self.state_key))
 
             elif isinstance(stmt, (ast.For, ast.While)):
                 case_body.extend(self._process_loop(stmt, idx, total_blocks, is_expanded_loop))
@@ -843,8 +1098,7 @@ class StateMachineTransformer(ast.NodeTransformer):
         body = [loop_node]
         next_idx = current_idx + 1
         if next_idx < total_blocks:
-            next_state = self.block_to_state_map[next_idx]
-            state_value = ast.Constant(next_state)
+            next_val = self.block_to_state_map[next_idx]
         elif is_expanded_loop:
             first_state = self.block_to_state_map[0]
             state_value = ast.Constant(first_state)
@@ -891,14 +1145,8 @@ class StateMachineTransformer(ast.NodeTransformer):
             first_state = self.block_to_state_map[0]
             state_value = ast.Constant(first_state)
         else:
-            state_value = ast.Constant(self.final_state)
-
-        body.append(
-            ast.Assign(
-                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                value=state_value,
-            )
-        )
+            next_val = self.final_state
+        body.extend(_make_state_assign(self.state_var, next_val, self.state_enc, self.state_key))
         return body
 
     def _process_try(self, try_node, current_idx, total_blocks, is_expanded_loop=False):
@@ -906,20 +1154,13 @@ class StateMachineTransformer(ast.NodeTransformer):
         next_idx = current_idx + 1
         body = [try_node]
         if next_idx < total_blocks:
-            next_state = self.block_to_state_map[next_idx]
-            state_value = ast.Constant(next_state)
+            next_val = self.block_to_state_map[next_idx]
         elif is_expanded_loop:
             first_state = self.block_to_state_map[0]
             state_value = ast.Constant(first_state)
         else:
-            state_value = ast.Constant(self.final_state)
-
-        body.append(
-            ast.Assign(
-                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                value=state_value,
-            )
-        )
+            next_val = self.final_state
+        body.extend(_make_state_assign(self.state_var, next_val, self.state_enc, self.state_key))
         return body
 
     def apply_transformation(self, code):
