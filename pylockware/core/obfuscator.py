@@ -191,6 +191,10 @@ class PyObfuscator:
             decorator_obf_config = {'name_gen': self.name_gen}
             self.module_manager.add_module(DecoratorObfModule(decorator_obf_config))
 
+        if self.builtin_dispatcher:
+            builtin_dispatcher_config = {'name_gen': self.name_gen}
+            self.module_manager.add_module(BuiltinDispatcherModule(builtin_dispatcher_config))
+
         # Add type annotation obfuscation (DISABLED - breaks type hints)
         # if self.type_annotation_obf:
         #     type_annotation_obf_config = {'name_gen': self.name_gen}

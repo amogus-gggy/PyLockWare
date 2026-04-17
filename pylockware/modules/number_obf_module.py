@@ -55,6 +55,12 @@ class NumberObfModule(ModuleBase):
                         # Convert back to source code
                         obfuscated_code = ast.unparse(obfuscated_tree)
 
+                        # Get required imports and inject them at the top
+                        imports_to_add = obfuscator.get_required_imports()
+                        if imports_to_add:
+                            # Add imports at the beginning of the file
+                            obfuscated_code = imports_to_add + '\n' + obfuscated_code
+
                         # Only write if changes were made
                         if obfuscated_code != original_code:
                             with open(py_file, 'w', encoding='utf-8') as f:
