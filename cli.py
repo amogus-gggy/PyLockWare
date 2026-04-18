@@ -15,6 +15,7 @@ from pylockware.core.obfuscator import PyObfuscator
 
 
 def main():
+    import sys
     parser = argparse.ArgumentParser(description="PyLockWare - Python Obfuscation Suite")
     parser.add_argument("project_path", help="Path to the project to obfuscate")
     parser.add_argument("--entry-point", required=True, help="Entry point file of the project (e.g., main.py)")
@@ -35,6 +36,8 @@ def main():
     parser.add_argument("--name-gen", choices=['english', 'chinese', 'mixed', 'numbers', 'hex'],
                        default='english', help="Character set for name generation (default: english)")
     parser.add_argument("--decorator-obf", action="store_true", help="Enable decorator obfuscation (converts @decorator to func = decorator(func))")
+    parser.add_argument("--call-obf", action="store_true", help="Enable call obfuscation using getattr(sys.modules[\"__main__\"], \"func_name\")() pattern")
+    parser.add_argument("--all", action="store_true", help="Enable all obfuscation options (except Nuitka)")
 
     # Nuitka EXE packaging options
     nuitka_group = parser.add_argument_group("Nuitka EXE Packaging Options")
@@ -53,6 +56,26 @@ def main():
     nuitka_group.add_argument("--nuitka-options", type=str, nargs='+', help="Additional custom Nuitka command-line options")
 
     args = parser.parse_args()
+
+    # Check for conflicts between import obfuscation and call obfuscation
+    if args.import_obf and args.call_obf:
+        print("ERROR: Import obfuscation and call obfuscation are incompatible.")
+        print("       Please use only one of these options at a time.")
+        sys.exit(1)
+
+    # If --all is specified, enable all obfuscation options (except Nuitka)
+    if args.all:
+        args.remap = True
+        args.string_prot = True
+        args.num_obf = True
+        args.import_obf = False
+        args.state_machine = True
+        args.builtin_dispatcher = True
+        args.junk_code = True
+        args.disable_traceback = True
+        args.decorator_obf = True
+        args.call_obf = False
+        # Note: anti-debug is not enabled with --all because it requires platform check
 
     # Check if anti-debug is requested but platform is not Windows AMD64
     import platform
@@ -88,6 +111,7 @@ def main():
         name_gen=args.name_gen,
         disable_traceback=args.disable_traceback,
         decorator_obf=args.decorator_obf,
+        call_obf=args.call_obf,
         enable_nuitka=args.nuitka,
         nuitka_onefile=args.nuitka_onefile,
         nuitka_standalone=args.nuitka_standalone,
