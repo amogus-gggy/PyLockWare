@@ -262,9 +262,19 @@ class ObfuscatorGUI(QMainWindow):
         self.import_obf_checkbox.setToolTip("Enable import obfuscation using dynamic execution techniques")
         self.import_obf_checkbox.clicked.connect(self.on_importobf_clicked)
         import_obf_layout.addWidget(self.import_obf_checkbox)
-        import_obf_layout.addWidget(self.create_help_button("Import obfuscation hides import statements using dynamic execution methods like __import__() and exec(), making dependencies harder to identify."))
+        import_obf_layout.addWidget(self.create_help_button("Import obfuscation hides import statements using dynamic execution methods like __import__() and exec(), making dependencies harder to identify. КОНФЛИКТ: Несовместимо с call obf."))
         import_obf_layout.addStretch()
         layout.addLayout(import_obf_layout)
+
+        # Call obfuscation option
+        call_obf_layout = QHBoxLayout()
+        self.call_obf_checkbox = QCheckBox("Call obfuscation")
+        self.call_obf_checkbox.setToolTip("Enable call obfuscation using globals()[\"func_name\"]() pattern")
+        self.call_obf_checkbox.clicked.connect(self.on_callobf_clicked)
+        call_obf_layout.addWidget(self.call_obf_checkbox)
+        call_obf_layout.addWidget(self.create_help_button("Call obfuscation replaces direct function calls with globals()[\"func_name\"]() pattern, making function calls harder to analyze. КОНФЛИКТ: Несовместимо с import obf."))
+        call_obf_layout.addStretch()
+        layout.addLayout(call_obf_layout)
 
         # State machine obfuscation option
         state_machine_layout = QHBoxLayout()
@@ -396,6 +406,7 @@ class ObfuscatorGUI(QMainWindow):
             'string_prot': self.string_prot_checkbox.isChecked(),
             'num_obf': self.num_obf_checkbox.isChecked(),
             'import_obf': self.import_obf_checkbox.isChecked(),
+            'call_obf': self.call_obf_checkbox.isChecked(),
             'state_machine': self.state_machine_checkbox.isChecked(),
             'builtin_dispatcher': self.builtin_dispatcher_checkbox.isChecked(),
             'junk_code': self.junk_code_checkbox.isChecked(),
@@ -487,11 +498,28 @@ class ObfuscatorGUI(QMainWindow):
                 self.import_obf_checkbox.setChecked(False)
 
     def on_importobf_clicked(self, checked):
-        """Handle import obfuscation checkbox click - warn if Nuitka is enabled"""
+        """Handle import obfuscation checkbox click - warn if Nuitka is enabled or call obf is enabled"""
         if checked and self.nuitka_enable_checkbox.isChecked():
             QMessageBox.warning(
                 self, "Nuitka Compatibility Warning",
                 "Import obfuscation is incompatible with Nuitka EXE packaging.\n\n"
+                "Import obfuscation has been disabled."
+            )
+            self.import_obf_checkbox.setChecked(False)
+        elif checked and self.call_obf_checkbox.isChecked():
+            QMessageBox.warning(
+                self, "Call Obfuscation Conflict",
+                "Import obfuscation is incompatible with call obfuscation.\n\n"
+                "Call obfuscation has been disabled."
+            )
+            self.call_obf_checkbox.setChecked(False)
+
+    def on_callobf_clicked(self, checked):
+        """Handle call obfuscation checkbox click - warn if import obf is enabled"""
+        if checked and self.import_obf_checkbox.isChecked():
+            QMessageBox.warning(
+                self, "Call Obfuscation Conflict",
+                "Call obfuscation is incompatible with import obfuscation.\n\n"
                 "Import obfuscation has been disabled."
             )
             self.import_obf_checkbox.setChecked(False)
