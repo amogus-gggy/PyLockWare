@@ -69,6 +69,9 @@ class GlobalRenamer(ast.NodeTransformer):
             '__subclasscheck__', '__class_getitem__',
         }
         
+        # Track global declarations in each scope
+        self.global_declarations = set()
+        
         # Only include non-protected names in replacements
         self.global_replacements = {
             k: v
@@ -112,15 +115,24 @@ class GlobalRenamer(ast.NodeTransformer):
         return node
 
     def visit_Global(self, node):
-        # Rename global declarations
-        for i, name in enumerate(node.names):
-            if name in self.global_replacements:
-                node.names[i] = self.global_replacements[name]
+        # Track global declarations - these names should NOT be renamed
+        for name in node.names:
+            self.global_declarations.add(name)
+        return node
+
+    def visit_Nonlocal(self, node):
+        # Track nonlocal declarations - these names should NOT be renamed
+        for name in node.names:
+            self.global_declarations.add(name)
         return node
 
     def visit_Name(self, node):
         # Don't rename builtin names
         if node.id in self.builtin_names:
+            return node
+
+        # Don't rename names that are declared as global or nonlocal
+        if node.id in self.global_declarations:
             return node
 
         if isinstance(node.ctx, ast.Load) and node.id in self.global_replacements:

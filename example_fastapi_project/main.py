@@ -4,12 +4,20 @@ Tests async endpoints, decorators, type hints, and various FastAPI patterns
 """
 from typing import List, Optional, Dict, Any
 from functools import wraps
+from contextlib import asynccontextmanager
 import time
 
 from fastapi import FastAPI, HTTPException, Query, Path, Body
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="PyLockWare Test API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("API started")
+    yield
+
+
+app = FastAPI(title="PyLockWare Test API", lifespan=lifespan)
 
 
 # --- Models ---
@@ -165,13 +173,6 @@ async def _simulate_async_work(data: str) -> Dict[str, Any]:
 async def process_data(data: str = Body(..., embed=True)):
     result = await _simulate_async_work(data)
     return result
-
-
-# --- Startup/Shutdown ---
-
-@app.on_event("startup")
-async def startup_event():
-    print("API started")
 
 
 import asyncio

@@ -65,7 +65,7 @@ def main():
 
     # If --all is specified, enable all obfuscation options (except Nuitka)
     if args.all:
-        args.remap = True
+        args.remap = False
         args.string_prot = True
         args.num_obf = True
         args.import_obf = False

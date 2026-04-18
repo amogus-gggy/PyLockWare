@@ -424,8 +424,12 @@ class StateMachineTransformer(ast.NodeTransformer):
             self.final_state = old_final_state
             return self.generic_visit(node)
 
-        # Split body into blocks
-        blocks = self._split_into_blocks(node.body)
+        # Hoist global/nonlocal declarations - they must appear before any use
+        hoisted_stmts = [s for s in node.body if isinstance(s, (ast.Global, ast.Nonlocal))]
+        body_without_hoisted = [s for s in node.body if not isinstance(s, (ast.Global, ast.Nonlocal))]
+
+        # Split body into blocks (without global/nonlocal)
+        blocks = self._split_into_blocks(body_without_hoisted)
 
         # Check if we can expand a single loop body
         expanded_blocks, loop_stmt = self._expand_single_loop_body(blocks)
@@ -469,6 +473,9 @@ class StateMachineTransformer(ast.NodeTransformer):
         # -----------------------------
 
         new_body = []
+
+        # Hoist global/nonlocal declarations first
+        new_body.extend(hoisted_stmts)
 
         # __state = initial state (first block)
         initial_state = self.block_to_state_map[0]
@@ -574,8 +581,12 @@ class StateMachineTransformer(ast.NodeTransformer):
 
         is_generator = any(isinstance(n, (ast.Yield, ast.YieldFrom)) for n in ast.walk(node))
 
-        # Split body into blocks
-        blocks = self._split_into_blocks(node.body)
+        # Hoist global/nonlocal declarations - they must appear before any use
+        hoisted_stmts = [s for s in node.body if isinstance(s, (ast.Global, ast.Nonlocal))]
+        body_without_hoisted = [s for s in node.body if not isinstance(s, (ast.Global, ast.Nonlocal))]
+
+        # Split body into blocks (without global/nonlocal)
+        blocks = self._split_into_blocks(body_without_hoisted)
 
         # Check if we can expand a single loop body
         expanded_blocks, loop_stmt = self._expand_single_loop_body(blocks)
@@ -619,6 +630,9 @@ class StateMachineTransformer(ast.NodeTransformer):
         # -----------------------------
 
         new_body = []
+
+        # Hoist global/nonlocal declarations first
+        new_body.extend(hoisted_stmts)
 
         # __state = initial state (first block)
         initial_state = self.block_to_state_map[0]
