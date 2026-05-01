@@ -2,6 +2,6 @@ psutil~=7.2.2
 pywin32==311
 PySide6~=6.10.2
 pyside6-fluent-widgets
-nuitka>=2.0
+nuitka==4.0.8
 ordered-set
 zstandard

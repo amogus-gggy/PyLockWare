@@ -45,7 +45,7 @@ class BuiltinDispatcherModule(ModuleBase):
             # First pass: collect all built-in functions used across all files
             all_builtins_used = set()
             for py_file in py_files:
-                if py_file.name == DISPATCHER_FILENAME:
+                if py_file.name in (DISPATCHER_FILENAME, "antidebug_llvm.py"):
                     continue
                 try:
                     with open(py_file, 'r', encoding='utf-8') as f:
@@ -110,7 +110,7 @@ class BuiltinDispatcherModule(ModuleBase):
             files_modified = 0
             
             for py_file in py_files:
-                if py_file.name == DISPATCHER_FILENAME:
+                if py_file.name in (DISPATCHER_FILENAME, "antidebug_llvm.py"):
                     continue
                 try:
                     with open(py_file, 'r', encoding='utf-8') as f:

@@ -32,8 +32,8 @@ class DisableTracebackModule(ModuleBase):
 
             # Find all Python files in the output directory
             for py_file in output_path.rglob("*.py"):
-                # Skip the obfuscator script itself
-                if py_file.name != "obfuscator.py":
+                # Skip the obfuscator script itself and the antidebug engine
+                if py_file.name not in ("obfuscator.py", "antidebug_llvm.py"):
                     try:
                         self._add_disable_traceback(py_file)
                     except Exception as e:

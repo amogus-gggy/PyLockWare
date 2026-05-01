@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/.venv python3
 """
 PyLockWare GUI Entry Point
 Graphical user interface for the Python obfuscation suite

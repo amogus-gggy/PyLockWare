@@ -219,24 +219,14 @@ class ObfuscatorGUI(QMainWindow):
         anti_debug_layout.addStretch()
         layout.addLayout(anti_debug_layout)
 
-        # Anti-debug mode selection
-        anti_debug_mode_layout = QHBoxLayout()
-        anti_debug_mode_label = QLabel("Protection Level:")
-        self.anti_debug_combo = QComboBox()
-        self.anti_debug_combo.addItems([
-            "Strict (with thread checking, breaks pyside, pyqt, numpy and most of other native libs)",
-            "Normal (without thread checking)",
-            "Native (high-performance protection using native DLL implementation)"
-        ])
-        self.anti_debug_combo.setCurrentIndex(0)
-        self.anti_debug_combo.setEnabled(True)
-        self.anti_debug_combo.setToolTip("Select the anti-debug protection level")
-
-        anti_debug_mode_layout.addWidget(anti_debug_mode_label)
-        anti_debug_mode_layout.addWidget(self.anti_debug_combo)
-        anti_debug_mode_layout.addWidget(self.create_help_button("Strict: Full protection but breaks native libs. Normal: Safer for GUI apps. Native: High-performance using native DLL."))
-        anti_debug_mode_layout.addStretch()
-        layout.addLayout(anti_debug_mode_layout)
+        # Warning about native libraries conflict
+        warning_label = QLabel(
+            "⚠️ Warning: Anti-debug is INCOMPATIBLE with PySide6, PyQt5/6, NumPy, "
+            "and other native libraries. Enabling it may cause crashes or undefined behavior."
+        )
+        warning_label.setWordWrap(True)
+        warning_label.setStyleSheet("color: #ff6600; font-weight: bold; padding: 5px;")
+        layout.addWidget(warning_label)
 
         layout.addStretch()
         tab.setLayout(layout)
@@ -423,19 +413,15 @@ class ObfuscatorGUI(QMainWindow):
             import sys
             # Check if running on Windows AMD64
             if not (sys.platform == 'win32' and platform.machine().lower() in ['amd64', 'x86_64']):
-                # Show warning and disable anti-debug
+                # Show warning and disable anti-debug for non-Windows
                 from PySide6.QtWidgets import QMessageBox
                 QMessageBox.warning(self, "Platform Warning",
-                                    "Anti-debug protection is only available for Windows AMD64. Option will be disabled.")
-                params['anti_debug'] = None
+                                    "Anti-debug protection is only available for Windows AMD64. "
+                                    "On other platforms, cross-platform Python-level checks will be used instead.")
+                params['anti_debug'] = 'crossplatform'
             else:
-                anti_debug_choice = self.anti_debug_combo.currentText()
-                if "Normal" in anti_debug_choice:
-                    params['anti_debug'] = 'normal'
-                elif "Native" in anti_debug_choice:
-                    params['anti_debug'] = 'native'
-                else:  # Strict
-                    params['anti_debug'] = 'strict'
+                # Default to native mode on Windows AMD64
+                params['anti_debug'] = 'native'
         else:
             params['anti_debug'] = None
 

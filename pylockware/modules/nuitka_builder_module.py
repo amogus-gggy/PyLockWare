@@ -71,7 +71,7 @@ class ImportAnalyzer:
         Returns:
             Set of all imported module names
         """
-        exclude_patterns = exclude_patterns or ['__pycache__', '.git', 'venv', 'env', '.venv']
+        exclude_patterns = exclude_patterns or ['__pycache__', '.git', 'venv', '.venv', '.venv']
         all_imports = set()
 
         for py_file in directory.rglob('*.py'):

@@ -50,7 +50,8 @@ class PyObfuscator:
         self.entry_function = entry_function
         self.output_dir = Path(output_dir)
         self.remap = remap
-        self.anti_debug = anti_debug  # Can be None, 'normal', or 'strict'
+        # anti_debug can be: None (disabled), 'native' (Windows AMD64), 'crossplatform' (all platforms)
+        self.anti_debug = anti_debug
         self.string_prot = string_prot  # Enable string protection
         self.num_obf = num_obf  # Enable number obfuscation
         self.import_obf = import_obf  # Enable import obfuscation
@@ -98,10 +99,6 @@ class PyObfuscator:
         For production protection, use dedicated protectors like Themida, VMProtect, etc.
         """
         if self.enable_nuitka:
-            # Disable anti-debug with Nuitka
-            if self.anti_debug:
-                self.anti_debug = None
-
             # Disable import obfuscation with Nuitka
             if self.import_obf:
                 print(f"WARNING: Import obfuscation is incompatible with Nuitka EXE packaging.")
@@ -163,8 +160,8 @@ class PyObfuscator:
 
         if self.anti_debug:
             anti_debug_config = {
-                'mode': self.anti_debug,
-                'entry_point': str(self.entry_point)
+                'entry_point': str(self.entry_point),
+                'mode': self.anti_debug  # 'native' or 'crossplatform'
             }
             self.module_manager.add_module(AntiDebugModule(anti_debug_config))
 

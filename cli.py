@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/.venv python3
 """
 PyLockWare CLI Entry Point
 Command-line interface for the Python obfuscation suite
@@ -23,7 +23,9 @@ def main():
     parser.add_argument("--banner", default="Obfuscated by PyLockWare Obfuscator", help="Banner text to add to modules")
     parser.add_argument("--output-dir", default="dist", help="Output directory for obfuscated project (default: dist)")
     parser.add_argument("--remap", action="store_true", help="Enable renaming of functions, variables, etc. to random names")
-    parser.add_argument("--anti-debug", choices=['normal', 'strict', 'native'], help="Enable anti-debug and anti-injection protection ('normal' without thread checking, 'strict' with thread checking, 'native' for native implementation)")
+    parser.add_argument("--anti-debug", action="store_true", help="Enable anti-debug and anti-injection protection")
+    parser.add_argument("--anti-debug-mode", choices=['native', 'crossplatform'], default='native',
+                       help="Anti-debug mode: native (Windows AMD64 only, high performance), crossplatform (all platforms, Python-level checks)")
     parser.add_argument("--string-prot", action="store_true", help="Enable string protection using base64 and zlib encoding")
     parser.add_argument("--num-obf", action="store_true", help="Enable number obfuscation using arithmetic expressions")
     parser.add_argument("--import-obf", action="store_true", help="Enable import obfuscation using dynamic execution techniques")
@@ -77,21 +79,21 @@ def main():
         args.call_obf = False
         # Note: anti-debug is not enabled with --all because it requires platform check
 
-    # Check if anti-debug is requested but platform is not Windows AMD64
     import platform
     import sys
-    if args.anti_debug and not (sys.platform == 'win32' and platform.machine().lower() in ['amd64', 'x86_64']):
-        print("Warning: Anti-debug protection is only available for Windows AMD64. Option will be ignored.")
-        args.anti_debug = None
-
+    
+    # Determine anti_debug mode
+    anti_debug_value = None
     if args.anti_debug:
-        print("\n" + "="*70)
-        print("WARNING: Anti-debug protection is not a complete security solution.")
-        print("         • It may be incompatible with other obfuscation modules")
-        print("         • It can be bypassed by experienced reverse engineers")
-        print("         • For production protection, use dedicated protectors like")
-        print("           Themida, VMProtect after obfuscation.")
-        print("="*70 + "\n")
+        is_windows_amd64 = sys.platform == 'win32' and platform.machine().lower() in ['amd64', 'x86_64']
+        if args.anti_debug_mode == 'native' and not is_windows_amd64:
+            print("Warning: Native anti-debug mode is only available for Windows AMD64.")
+            print("         Falling back to cross-platform mode.")
+            anti_debug_value = 'crossplatform'
+        elif args.anti_debug_mode == 'crossplatform':
+            anti_debug_value = 'crossplatform'
+        else:
+            anti_debug_value = 'native'  # Default to native on Windows AMD64
 
     obfuscator = PyObfuscator(
         project_path=args.project_path,
@@ -99,7 +101,7 @@ def main():
         entry_function=args.entry_function,
         output_dir=args.output_dir,
         remap=args.remap,
-        anti_debug=args.anti_debug,
+        anti_debug=anti_debug_value,
         string_prot=args.string_prot,
         num_obf=args.num_obf,
         import_obf=args.import_obf,

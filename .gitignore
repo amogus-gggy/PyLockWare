@@ -8,6 +8,8 @@ antidebug_temp
 /.vs/slnx.sqlite
 /.vs/PyLockWare.slnx/v18/Browse.VC.db-wal
 native_src\PyLockWareRuntime\.vs
-env
+.venv
 nuitka_dist
 /crackme/
+tools
+.kiro

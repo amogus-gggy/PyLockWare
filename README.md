@@ -1,251 +1,201 @@
-# PyLockWare - Advanced Python Obfuscation Suite
+# PyLockWare — Python Obfuscation Suite
 
-PyLockWare is a comprehensive Python obfuscation tool designed to protect your source code from reverse engineering and unauthorized access. It provides multiple layers of protection through advanced obfuscation techniques, anti-debugging mechanisms, and code transformation methods.
+Advanced Python source code protection: AST-based obfuscation, LLVM JIT anti-debug, and Nuitka EXE packaging.
 
-## 🚀 Features
+---
 
-- **Identifier Remapping**: Renames functions, classes, variables, and attributes to random, meaningless names
-- **String Protection**: Encodes string literals using base64 and zlib compression to prevent easy extraction
-- **Number Obfuscation**: Transforms numeric constants into complex arithmetic expressions
-- **Import Obfuscation**: Hides import statements using dynamic execution techniques
-- **State Machine Obfuscation**: Transforms functions into state machines to obfuscate control flow
-- **Builtin Dispatcher Obfuscation**: Replaces built-in function calls (print, len, input, etc.) with calls via a dispatcher class using obfuscated names
-- **Junk Code Generation**: Adds fake if/elif branches with opaque predicates that always evaluate to True or False
-- **Disable Traceback**: Hides error details by setting sys.tracebacklimit = 0 at the start of each file
-- **Configurable Name Generators**: Customizable character sets for generated obfuscated names (English, Chinese, mixed, numbers, hex)
-- **Configurable Opaque Predicates**: Multiple complexity levels for junk code conditions (Low, Medium, High)
-- **Anti-Debug Protection**: Windows AMD64 only, very unstable, especially with nuitka.
-- **Multi-Platform Support**: Works across Windows, macOS, and Linux
-- **Dual Interface**: Both command-line and graphical user interfaces
-- **Preserves Functionality**: Maintains original program behavior while protecting the source code
-- **Nuitka EXE Packaging**: Built-in support for compiling obfuscated code to standalone executables
+## Features
 
-## 📋 Requirements
+| Module | Description |
+|---|---|
+| `--remap` | Renames all identifiers (functions, classes, variables) to random names |
+| `--string-prot` | Encodes string literals with base64 + zlib |
+| `--num-obf` | Replaces numeric constants with arithmetic expressions |
+| `--import-obf` | Hides imports via dynamic execution (`exec`/`__import__`) |
+| `--state-machine` | Transforms functions into state machines |
+| `--builtin-dispatcher` | Routes built-in calls through an obfuscated dispatcher class |
+| `--junk-code` | Injects dead branches with opaque predicates |
+| `--decorator-obf` | Converts `@decorator` syntax to explicit assignment form |
+| `--call-obf` | Replaces direct calls with `getattr(sys.modules[...], name)()` |
+| `--disable-traceback` | Sets `sys.tracebacklimit = 0` in every file |
+| `--anti-debug` | LLVM JIT anti-debug engine (Windows x64 only, see below) |
 
-- Python 3.7 or higher
-- Dependencies:
-  - `psutil` (~=7.2.2)
-  - `pywin32` (~=311) - Windows only
-  - `PySide6` (~=6.10.2)
+---
 
-## 🛠️ Installation
+## Requirements
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/amogus-gggy/PyLockWare.git
-   cd PyLockWare
-   ```
+- Python 3.10+
+- `pip install -r requirements.txt`
 
-2. Create a virtual environment (recommended):
-   ```bash
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-   ```
+Dependencies: `psutil`, `pywin32` (Windows), `PySide6`, `nuitka`, `llvmlite`
 
-3. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
+---
 
-## 🎯 Usage
+## Installation
 
-### Graphical User Interface (GUI)
+```bash
+git clone https://github.com/amogus-gggy/PyLockWare.git
+cd PyLockWare
+python -m venv .venv
+.venv\Scripts\activate      # Windows
+pip install -r requirements.txt
+```
 
-Launch the intuitive GUI for easy configuration:
+---
+
+## Usage
+
+### GUI
 
 ```bash
 python gui.py
 ```
 
-The GUI provides:
-- Project path selection
-- Configuration options for each obfuscation technique
-- State machine obfuscation to transform functions into state machines
-- Configurable name generators with multiple character sets (English, Chinese, mixed, numbers, hex)
-- Real-time preview of settings
-- One-click obfuscation process
-
-### Command-Line Interface (CLI)
-
-For automation and integration into build processes:
+### CLI — full command with all options
 
 ```bash
-python cli.py /path/to/your/project --entry-point main.py [options]
+python cli.py <project_path> \
+  --entry-point main.py \
+  --entry-function main \
+  --output-dir dist \
+  --remap \
+  --anti-debug \
+  --string-prot \
+  --num-obf \
+  --state-machine \
+  --builtin-dispatcher \
+  --junk-code \
+  --junk-density 0.8 \
+  --opaque-complexity high \
+  --disable-traceback \
+  --decorator-obf \
+  --name-gen english \
+  --banner "Protected"
 ```
 
-#### CLI Options
+> `--import-obf` and `--call-obf` are mutually exclusive — pick one or neither.
 
-| Option | Description |
-|--------|-------------|
-| `--entry-point` | Entry point file of the project (required) |
-| `--entry-function` | Main function name in the entry point (default: main) |
-| `--banner` | Banner text to add to modules (default: "Obfuscated by PyLockWare Obfuscator") |
-| `--output-dir` | Output directory for obfuscated project (default: dist) |
-| `--remap` | Enable renaming of functions, variables, etc. to random names |
-| `--anti-debug {normal,strict,native}` | Enable anti-debug and anti-injection protection |
-| `--string-prot` | Enable string protection using base64 and zlib encoding |
-| `--num-obf` | Enable number obfuscation using arithmetic expressions |
-| `--import-obf` | Enable import obfuscation using dynamic execution techniques |
-| `--state-machine` | Enable state machine obfuscation to transform functions into state machines |
-| `--builtin-dispatcher` | Enable builtin dispatcher obfuscation to replace built-in calls with dispatcher calls |
-| `--junk-code` | Enable junk code generation with fake if/elif branches |
-| `--junk-density {0.0-1.0}` | Junk code density from 0.0 to 1.0 (default: 0.5) |
-| `--opaque-complexity {low,medium,high}` | Complexity level of opaque predicates (default: high) |
-| `--disable-traceback` | Disable traceback by setting sys.tracebacklimit = 0 at the start of each file |
-| `--name-gen {english,chinese,mixed,numbers,hex}` | Character set for name generation (default: english) |
+### CLI — with Nuitka EXE packaging
 
-#### Example Usage
-
-Basic obfuscation with all protections enabled:
 ```bash
-python cli.py /path/to/project --entry-point main.py --remap --string-prot --num-obf --import-obf --anti-debug strict
+python cli.py <project_path> \
+  --entry-point main.py \
+  --output-dir dist \
+  --remap \
+  --anti-debug \
+  --string-prot \
+  --num-obf \
+  --state-machine \
+  --builtin-dispatcher \
+  --junk-code \
+  --junk-density 0.8 \
+  --opaque-complexity high \
+  --disable-traceback \
+  --decorator-obf \
+  --nuitka \
+  --nuitka-onefile \
+  --nuitka-standalone \
+  --nuitka-output-name myapp \
+  --nuitka-enable-console \
+  --nuitka-plugins pyside6
 ```
 
-Obfuscation with junk code and opaque predicates:
+### CLI — all options reference
+
+| Option | Default | Description |
+|---|---|---|
+| `project_path` | — | Path to the project directory |
+| `--entry-point` | required | Entry point file (e.g. `main.py`) |
+| `--entry-function` | `main` | Name of the main function |
+| `--output-dir` | `dist` | Output directory |
+| `--banner` | `"Obfuscated by PyLockWare Obfuscator"` | Comment added to each file |
+| `--remap` | off | Rename all identifiers |
+| `--anti-debug` | off | LLVM JIT anti-debug (Windows x64) |
+| `--string-prot` | off | Encode string literals |
+| `--num-obf` | off | Obfuscate numeric constants |
+| `--import-obf` | off | Dynamic import obfuscation *(incompatible with `--call-obf`)* |
+| `--state-machine` | off | State machine transformation |
+| `--builtin-dispatcher` | off | Builtin call dispatcher |
+| `--junk-code` | off | Dead code injection |
+| `--junk-density` | `0.5` | Junk code density `0.0–1.0` |
+| `--opaque-complexity` | `high` | Predicate complexity: `low` / `medium` / `high` |
+| `--disable-traceback` | off | `sys.tracebacklimit = 0` in every file |
+| `--decorator-obf` | off | Expand decorator syntax |
+| `--call-obf` | off | `getattr`-based call obfuscation *(incompatible with `--import-obf`)* |
+| `--name-gen` | `english` | Name charset: `english` / `chinese` / `mixed` / `numbers` / `hex` |
+| `--nuitka` | off | Package to EXE via Nuitka |
+| `--nuitka-onefile` | on | Single-file EXE (`--onefile`) |
+| `--nuitka-no-onefile` | — | Disable onefile |
+| `--nuitka-standalone` | on | Standalone distribution |
+| `--nuitka-no-standalone` | — | Disable standalone |
+| `--nuitka-output-name` | — | EXE filename |
+| `--nuitka-disable-console` | on | Hide console window (GUI apps) |
+| `--nuitka-enable-console` | — | Show console window |
+| `--nuitka-icon` | — | Path to `.ico` file |
+| `--nuitka-admin` | off | Request UAC admin elevation |
+| `--nuitka-plugins` | — | Nuitka plugins (e.g. `pyside6 numpy`) |
+| `--nuitka-extra-imports` | — | Extra modules to include |
+| `--nuitka-options` | — | Raw Nuitka CLI flags |
+
+---
+
+## Anti-Debug Engine
+
+The `--anti-debug` flag injects an LLVM JIT-compiled protection engine (`antidebug_llvm.py`) into every output file. It runs two checks at startup and then monitors continuously in a background thread.
+
+**JIT checks (compiled to native x64 via MCJIT):**
+- `PEB.BeingDebugged` — direct PEB read
+- `PEB.NtGlobalFlag` — debug heap flags (`0x70`)
+- `NtQueryInformationProcess(ProcessDebugPort)` — non-zero = debugger attached
+- `NtQueryInformationProcess(ProcessDebugFlags)` — zero = debugger attached
+- `IsDebuggerPresent` / `CheckRemoteDebuggerPresent`
+
+**Python-level checks (continuous monitoring):**
+- Blacklisted DLLs/PYDs loaded in process: `pydevd`, `pydevd_cython`, `debugpy`, `x64dbg`, `ida`, `frida`, `pyshell` (de4py), etc.
+- Blacklisted Python thread names: `pydevd.Writer`, `pydevd.Reader`, `pydevd.CommandThread`
+- `sys.gettrace()` active
+- `sys.monitoring` DEBUGGER_ID set (Python 3.12+ PEP 669)
+- New native threads from unknown/unmapped memory (manual map detection)
+- Hardware breakpoints (DR0–DR3) on any thread
+- New DLLs injected from temp paths (stealth injection detection)
+
+On violation: prints reason to stderr and calls `os._exit(1)`.
+
+**Nuitka onefile** is detected automatically — temp paths from `onefile_<pid>_*` / `ONEFIL~N` are whitelisted.
+
+---
+
+## Compatibility Notes
+
+- `--import-obf` and `--call-obf` are mutually exclusive
+- `--import-obf` is disabled automatically when `--nuitka` is used
+- `--anti-debug` requires Windows x64; silently skipped on other platforms
+- Heavier obfuscation (`--state-machine` + `--junk-code` + `--builtin-dispatcher`) increases file size and startup time
+
+---
+
+## Recommended Workflow
+
+**Python distribution (no EXE):**
 ```bash
-python cli.py /path/to/project --entry-point main.py --remap --junk-code --junk-density 0.7 --opaque-complexity high
+python cli.py myproject --entry-point main.py \
+  --remap --anti-debug --string-prot --num-obf \
+  --state-machine --builtin-dispatcher --junk-code \
+  --disable-traceback --output-dir dist
 ```
 
-Obfuscation with traceback disabled (hides error details):
+**EXE distribution:**
 ```bash
-python cli.py /path/to/project --entry-point main.py --remap --string-prot --disable-traceback
+python cli.py myproject --entry-point main.py \
+  --remap --anti-debug --string-prot --num-obf \
+  --state-machine --builtin-dispatcher --junk-code \
+  --disable-traceback \
+  --nuitka --nuitka-onefile --nuitka-output-name myapp \
+  --output-dir dist
 ```
 
-Full obfuscation with all features including state machine and junk code:
-```bash
-python cli.py /path/to/project --entry-point main.py --remap --string-prot --num-obf --state-machine --builtin-dispatcher --junk-code --junk-density 0.8 --opaque-complexity high
-```
+---
 
-Light obfuscation with only identifier remapping:
-```bash
-python cli.py /path/to/project --entry-point main.py --remap
-```
+## License
 
-Custom output directory:
-```bash
-python cli.py /path/to/project --entry-point main.py --remap --output-dir ./protected_build
-```
-
-## 🔧 How It Works
-
-PyLockWare uses an AST (Abstract Syntax Tree) based approach to transform your Python code:
-
-1. **Parsing**: The source code is parsed into an AST representation
-2. **Transformation**: Multiple transformation passes apply different obfuscation techniques
-3. **Code Generation**: The transformed AST is converted back to Python source code
-4. **Protection Layering**: Additional protection mechanisms are applied as needed
-
-Each obfuscation technique operates independently, allowing for flexible configuration based on your security needs and performance requirements.
-
-## 🛡️ Protection Techniques
-
-### Identifier Remapping
-Transforms meaningful variable and function names into random sequences, making code analysis significantly more difficult.
-
-### String Protection
-Encodes string literals to prevent easy extraction of sensitive information like API keys, file paths, or hardcoded values.
-
-### Number Obfuscation
-Converts numeric constants into complex mathematical expressions, hiding important numerical values.
-
-### Import Obfuscation
-Hides import statements using dynamic execution, making dependency analysis more challenging.
-
-### Anti-Debug Protection
-Implements runtime checks to detect and prevent debugging attempts, with three modes:
-- **Normal**: Basic detection of common debugging tools
-- **Strict**: Enhanced detection including thread monitoring
-- **Native**: High-performance protection using native DLL implementation for maximum security
-
-### State Machine Obfuscation
-Transforms functions into state machines to obfuscate control flow, making it significantly harder to analyze and understand the program's logic by converting sequential code into a series of state transitions.
-
-### Builtin Dispatcher Obfuscation
-Replaces built-in function calls (such as `print()`, `len()`, `input()`, `open()`, etc.) with calls through a dispatcher class using obfuscated names. This makes it harder to identify which built-in functions are being used in the code.
-
-**Example:**
-```python
-# Before obfuscation:
-print("Hello, World!")
-result = len(items)
-
-# After obfuscation:
-from _builtin_dispatcher import _abc123 as _XyZ789
-_XyZ789.ghJkLm("Hello, World!")
-result = _XyZ789.NoPqRs(items)
-```
-
-The dispatcher is automatically created and copied to each package directory, ensuring proper imports regardless of the module's location in the project structure.
-
-### Junk Code Generation
-Adds fake if/elif branches with opaque predicates that always evaluate to True or False. These branches contain dead code that never executes but significantly complicates code analysis and reverse engineering.
-
-**Features:**
-- **Opaque Predicates**: Complex conditions that always evaluate to True or False (e.g., `pow(x, 0) == 1`, `(x ^ y) ^ y == x`, `chr(ord('A')) == 'A'`)
-- **Configurable Density**: Control how much junk code is added (0.0 to 1.0)
-- **Multiple Complexity Levels**: 
-  - **Low**: Simple mathematical identities
-  - **Medium**: More complex expressions and built-in function calls
-  - **High**: Very complex predicates with nested conditions and boolean combinations
-
-**Example opaque predicates:**
-```python
-# Always True:
-(x * 2) // 2 == x
-pow(7, 0) == 1
-(x ^ y) ^ y == x
-chr(ord('A')) == 'A'
-sum([1, 2, 3]) == 6
-
-# Always False:
-pow(42, 1) != 42
-"abc" in "def"
-isinstance(42, str)
-sum([1, 2, 3]) != 6
-```
-
-### Configurable Name Generators
-Provides customizable character sets for generating obfuscated names, including:
-- **English**: Standard Latin letters and digits
-- **Chinese**: Chinese Unicode characters
-- **Mixed**: Combination of English and Chinese characters
-- **Numbers**: Numeric digits only
-- **Hex**: Hexadecimal characters (0-9, A-F)
-
-
-
-## 🧪 Testing Your Obfuscated Code
-
-After obfuscation, always test your protected code to ensure it functions correctly:
-
-1. Navigate to the output directory
-2. Run your application with the same inputs used in the original version
-3. Verify all features work as expected
-4. Check for any performance impacts
-
-## ⚠️ Important Notes
-
-- Always keep a backup of your original source code
-- Test thoroughly after obfuscation to ensure functionality is preserved
-- Heavier obfuscation may impact runtime performance
-- Some antivirus software may flag anti-debug protections as suspicious
-- The obfuscated code remains Python and can theoretically be reversed with sufficient effort
-
-
-### Recommended Workflow for EXE Distribution
-
-1. Obfuscate your Python code with PyLockWare (without anti-debug/import-obf)
-2. Package with Nuitka into a standalone EXE
-3. Apply a native protector (Themida/VMProtect) to the resulting EXE
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
-
-## 📄 License
-
-This project is licensed under the AGPLv3 License - see the LICENSE file for details.
-
-## 🐛 Issues and Support
-
-If you encounter any problems or have suggestions for improvements, please open an issue on GitHub.
+AGPLv3 — see `LICENSE`.
