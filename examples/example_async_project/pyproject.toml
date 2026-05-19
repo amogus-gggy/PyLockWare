@@ -14,10 +14,10 @@ import_obf = false
 state_machine = true
 builtin_dispatcher = true
 junk_code = true
-decorator_obf = false
+decorator_obf = true
 call_obf = false
 disable_traceback = true
-
+virtualization = true
 # Obfuscation Parameters
 junk_density = 0.5
 opaque_complexity = "high"
@@ -26,7 +26,7 @@ banner = "Obfuscated by PyLockWare"
 
 # Anti-Debug (leave commented to disable)
 # anti_debug = "native"  # or "crossplatform"
-# anti_debug_mode = "native"
+anti_debug_mode = "native"
 
 # Nuitka Options (for compiling to executable)
 enable_nuitka = false

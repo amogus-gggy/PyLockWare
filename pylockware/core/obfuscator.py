@@ -25,6 +25,7 @@ from pylockware.modules.junk_code_module import JunkCodeModule
 from pylockware.modules.decorator_obf_module import DecoratorObfModule
 from pylockware.modules.type_annotation_obf_module import TypeAnnotationObfModule
 from pylockware.modules.call_obf_module import CallObfModule
+from pylockware.modules.virtualization_module import VirtualizationModule
 from pylockware.modules.remove_annotations_module import RemoveAnnotationsModule
 
 
@@ -45,7 +46,8 @@ class PyObfuscator:
                  nuitka_output_name: str = None, nuitka_disable_console: bool = True, nuitka_icon: str = None,
                  nuitka_admin: bool = False, nuitka_plugins: List[str] = None, nuitka_extra_imports: List[str] = None,
                  nuitka_options: List[str] = None, disable_traceback: bool = False,
-                 decorator_obf: bool = False, type_annotation_obf: bool = False, call_obf: bool = False):
+                 decorator_obf: bool = False, type_annotation_obf: bool = False, call_obf: bool = False,
+                 virtualization: bool = False):
         self.project_path = Path(project_path)
         self.entry_point = Path(entry_point)
         self.entry_function = entry_function
@@ -66,6 +68,7 @@ class PyObfuscator:
         self.decorator_obf = decorator_obf  # Enable decorator obfuscation
         self.type_annotation_obf = type_annotation_obf  # Enable type annotation obfuscation
         self.call_obf = call_obf  # Enable call obfuscation using getattr pattern
+        self.virtualization = virtualization  # Enable CustomVM virtualization
 
         # Nuitka options
         self.enable_nuitka = enable_nuitka
@@ -100,6 +103,12 @@ class PyObfuscator:
         For production protection, use dedicated protectors like Themida, VMProtect, etc.
         """
         if self.enable_nuitka:
+            # Disable anti-debug with Nuitka
+            if self.anti_debug:
+                print(f"WARNING: Anti-debug is incompatible with Nuitka EXE packaging.")
+                print(f"         Anti-debug has been disabled.")
+                self.anti_debug = None
+            
             # Disable import obfuscation with Nuitka
             if self.import_obf:
                 print(f"WARNING: Import obfuscation is incompatible with Nuitka EXE packaging.")
@@ -142,6 +151,9 @@ class PyObfuscator:
 
 
 
+        if self.virtualization:
+            virtualization_config = {}
+            self.module_manager.add_module(VirtualizationModule(virtualization_config))
 
         if self.remap:
             remap_config = {
@@ -194,9 +206,10 @@ class PyObfuscator:
             self.module_manager.add_module(StateMachineModule(state_machine_config))
 
         # Decorator obfuscation - converts @decorator to explicit assignments
-        if self.decorator_obf:
-            decorator_obf_config = {'name_gen': self.name_gen}
-            self.module_manager.add_module(DecoratorObfModule(decorator_obf_config))
+        #module disabled due to conflict with annotations
+        #if self.decorator_obf:
+        #    decorator_obf_config = {'name_gen': self.name_gen}
+        #    self.module_manager.add_module(DecoratorObfModule(decorator_obf_config))
 
         if self.builtin_dispatcher:
             builtin_dispatcher_config = {'name_gen': self.name_gen}
@@ -213,11 +226,15 @@ class PyObfuscator:
             from pylockware.modules.disable_traceback_module import DisableTracebackModule
             self.module_manager.add_module(DisableTracebackModule({}))
 
+
+
+
         # Add Nuitka module LAST so it runs after all obfuscation
         if self.enable_nuitka:
             self.module_manager.add_module(self.nuitka_module)
         
         # Add RemoveAnnotations module ABSOLUTELY LAST to clean up decorators
+        # This removes @virtualize AFTER virtualization has processed them
         self.module_manager.add_module(RemoveAnnotationsModule({}))
 
     def validate_paths(self):

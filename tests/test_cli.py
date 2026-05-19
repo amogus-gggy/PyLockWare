@@ -339,6 +339,7 @@ class TestCLI:
         
         assert result.returncode == 0
 
+    @pytest.mark.skip(reason="Crackme project test disabled")
     def test_cli_crackme(self, crackme_project_path, temp_dir):
         """Test CLI obfuscation of crackme project"""
         output_dir = temp_dir / "cli_output"

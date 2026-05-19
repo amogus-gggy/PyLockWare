@@ -558,7 +558,7 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.block_to_state_map = old_block_to_state_map
         self.state_to_block_map = old_state_to_block_map
         self.final_state = old_final_state
-        return self.generic_visit(node)
+        return node
 
     def visit_FunctionDef(self, node):
         # Check for @skip_obf decorator
@@ -725,7 +725,7 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.block_to_state_map = old_block_to_state_map
         self.state_to_block_map = old_state_to_block_map
         self.final_state = old_final_state
-        return self.generic_visit(node)
+        return node
 
     def _split_into_blocks(self, body):
         """Aggressive splitting into blocks"""

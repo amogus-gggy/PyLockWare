@@ -32,8 +32,8 @@ class NumberObfModule(ModuleBase):
         try:
             print("Applying number obfuscation to all Python files...")
 
-            # Create an instance of the number obfuscator
-            obfuscator = NumberObfuscator()
+            # Create an instance of the number obfuscator with parallel processing enabled
+            obfuscator = NumberObfuscator(use_parallel=True)
 
             # Find all Python files in the output directory
             for py_file in output_path.rglob("*.py"):
@@ -46,7 +46,10 @@ class NumberObfModule(ModuleBase):
                         # Parse the code to AST
                         tree = ast.parse(original_code)
 
-                        # Apply number obfuscation
+                        # Preprocess: collect and obfuscate all numbers in parallel
+                        obfuscator.preprocess_numbers(tree)
+
+                        # Apply number obfuscation (using cached results)
                         obfuscated_tree = obfuscator.visit(tree)
 
                         # Fix missing locations

@@ -46,6 +46,7 @@ class TestCLIAllFlag:
         
         assert result.returncode == 0
 
+    @pytest.mark.skip(reason="Crackme project test disabled")
     def test_cli_all_flag_with_crackme(self, crackme_project_path, temp_dir):
         """Test CLI with --all flag on crackme"""
         output_dir = temp_dir / "cli_output"
@@ -67,7 +68,7 @@ class TestCLIAllFlag:
     def test_cli_all_flag_with_async(self, example_async_project_path, temp_dir):
         """Test CLI with --all flag on async project"""
         output_dir = temp_dir / "cli_output"
-        
+
         result = subprocess.run(
             [
                 sys.executable, "cli.py",

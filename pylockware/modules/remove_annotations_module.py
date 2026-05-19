@@ -16,7 +16,7 @@ class RemoveAnnotationsTransformer(ast.NodeTransformer):
     и импорты pylockware
     """
     
-    PYLOCKWARE_DECORATORS = {'external', 'skip_obf', 'preserve_name'}
+    PYLOCKWARE_DECORATORS = {'external', 'skip_obf', 'preserve_name', 'virtualize'}
     
     def __init__(self):
         self.removed_count = 0

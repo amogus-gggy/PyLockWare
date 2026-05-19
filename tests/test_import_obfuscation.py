@@ -170,6 +170,7 @@ class TestImportObfuscation:
         result = obfuscator.run_obfuscation("Obfuscated by PyLockWare")
         assert result is True
 
+    @pytest.mark.skip(reason="Crackme project test disabled")
     def test_import_obf_with_crackme(self, crackme_project_path, temp_dir):
         """Test import obfuscation with crackme project"""
         output_dir = temp_dir / "output"

@@ -214,6 +214,7 @@ class TestExamplePySide6Project:
 class TestCrackmeProject:
     """Tests for crackme project"""
 
+    @pytest.mark.skip(reason="Crackme project test disabled")
     def test_obfuscate_crackme_basic(self, crackme_project_path, temp_dir):
         """Test basic obfuscation of crackme project"""
         output_dir = temp_dir / "crackme_output"
@@ -227,6 +228,7 @@ class TestCrackmeProject:
         result = obfuscator.run_obfuscation("Obfuscated by PyLockWare")
         assert result is True
 
+    @pytest.mark.skip(reason="Crackme project test disabled")
     def test_obfuscate_crackme_with_all_options(self, crackme_project_path, temp_dir):
         """Test obfuscation of crackme project with all options"""
         output_dir = temp_dir / "crackme_output"

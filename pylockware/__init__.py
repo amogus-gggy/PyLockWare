@@ -4,7 +4,7 @@ A comprehensive SDK for protecting Python code with multiple obfuscation layers.
 
 Usage:
     # Using decorators
-    from pylockware import external, skip_obf
+    from pylockware import external, skip_obf, virtualize
     
     @external
     def public_api():
@@ -14,10 +14,15 @@ Usage:
     def debug_function():
         pass
     
+    @virtualize
+    def secret_algorithm():
+        # Converted to CustomVM bytecode
+        pass
+    
     # Using SDK
     from pylockware.sdk import Builder, BuildConfig
     
-    config = BuildConfig(entry_point="main.py")
+    config = BuildConfig(entry_point="main.py", virtualization=True)
     builder = Builder(config)
     builder.build()
     
@@ -42,7 +47,7 @@ from .modules import (
 )
 
 # SDK components
-from .decorators import external, skip_obf, preserve_name
+from .decorators import external, skip_obf, preserve_name, virtualize
 from .sdk import Builder, BuildConfig, load_config, save_config, init_config
 
 __version__ = "3.0.0"
@@ -70,4 +75,5 @@ __all__ = [
     'external',
     'skip_obf',
     'preserve_name',
+    'virtualize',
 ]
