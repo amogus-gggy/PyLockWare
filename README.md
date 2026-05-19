@@ -5,6 +5,10 @@
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
+## Version 2.0
+
+
+
 ## 🚀 Features
 
 ### Annotation-Based Control
@@ -24,7 +28,7 @@
 - **Name Remapping** - Rename identifiers
 
 ### Anti-Debug Protection
-- **Native Mode** - Windows AMD64 DLL injection
+- **Native Mode** - Windows AMD64 only, protects even from dll injections, etc.
 - **Cross-platform Mode** - Python-level checks
 
 ### Build System

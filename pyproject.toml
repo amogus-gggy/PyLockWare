@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pylockware"
-version = "3.0.0"
+version = "2.0.0"
 description = "Python Code Protection SDK with obfuscation and anti-debug features"
 readme = "README.md"
 requires-python = ">=3.8"
@@ -24,7 +24,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: AGPLv3 License",
     "Operating System :: OS Independent",
 ]
 
@@ -61,10 +61,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/pylockware"
-Documentation = "https://github.com/yourusername/pylockware/blob/main/SDK_README.md"
-Repository = "https://github.com/yourusername/pylockware"
-"Bug Tracker" = "https://github.com/yourusername/pylockware/issues"
+Homepage = "https://github.com/amogus-gggy/pylockware"
+Documentation = "https://github.com/amogus-gggy/pylockware/blob/main/SDK_README.md"
+Repository = "https://github.com/amogus-gggy/pylockware"
+"Bug Tracker" = "https://github.com/amogus-gggy/pylockware/issues"
 
 [project.scripts]
 pylockware = "pylockware.cli.build:main"
