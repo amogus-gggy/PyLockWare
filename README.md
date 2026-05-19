@@ -6,7 +6,8 @@
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 ## Version 2.0
-
+# Very important Note:
+Virtualization is beta, and may not be fully supported yet. Respect to [![CustomVM](https://github.com/6x-u/CustomVM) for good virtual machine.
 
 
 ## 🚀 Features
