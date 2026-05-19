@@ -1,22 +1,3 @@
-
-"""
-PyLockWare AntiDebug Engine (LLVM JIT)
-======================================
-Низкоуровневый антиотладочный/антиинжекционный модуль, скомпилированный
-в машинный код через llvmlite (LLVM IR → MCJIT). Работает только на Windows x64.
-
-Проверки:
-  1. Нативная отладка  — PEB.BeingDebugged, NtGlobalFlag, DebugPort, ProcessDebugFlags
-  2. Python-отладчики  — эвристики по загруженным модулям (pydevd, debugpy)
-  3. DLL инжекция      — перечисление модулей + сравнение с whitelist
-  4. Подозрительные потоки — быстрый снимок через Toolhelp32, поиск «потерянных» TID
-
-При срабатывании любой проверки — вызывается нативный callback, который
-через Python-API печатает причину в stderr и вызывает os._exit(1).
-
-Зависимости: llvmlite, psutil, pywin32 (опционально, для EnumProcessModulesEx)
-"""
-
 from __future__ import annotations
 
 import ctypes
@@ -30,18 +11,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Set
 
-# ---------------------------------------------------------------------------
-# llvmlite — компиляция нативных проверок
-# ---------------------------------------------------------------------------
 
 try:
     from llvmlite import ir, binding as llvm
 except ImportError:
     raise ImportError("llvmlite is required. Install: pip install llvmlite")
 
-# ---------------------------------------------------------------------------
-# Windows API (ctypes) — константы взяты из process_logger.py
-# ---------------------------------------------------------------------------
+
 
 ntdll    = ctypes.WinDLL("ntdll.dll")
 kernel32 = ctypes.WinDLL("kernel32.dll")
@@ -151,9 +127,6 @@ class MEMORY_BASIC_INFORMATION(ctypes.Structure):
         ("Type",              wt.DWORD),
     ]
 
-# ---------------------------------------------------------------------------
-# CONTEXT x64 для DR-регистров
-# ---------------------------------------------------------------------------
 
 class CONTEXT_x64(ctypes.Structure):
     _fields_ = [
@@ -181,21 +154,18 @@ class CONTEXT_x64(ctypes.Structure):
 
 CONTEXT_DEBUG_REGISTERS = 0x00000010
 
-# ---------------------------------------------------------------------------
-# Python C-API для callback (печать причины + выход)
-# ---------------------------------------------------------------------------
 
-# PySys_WriteStderr(const char *format, ...)
+
 _PySys_WriteStderr = ctypes.pythonapi.PySys_WriteStderr
 _PySys_WriteStderr.argtypes = [ctypes.c_char_p]
 _PySys_WriteStderr.restype = None
 
-# PyErr_PrintEx(int set_sys_last_vars)
+
 _PyErr_PrintEx = ctypes.pythonapi.PyErr_PrintEx
 _PyErr_PrintEx.argtypes = [ctypes.c_int]
 _PyErr_PrintEx.restype = None
 
-# os._exit
+
 _os_exit = os._exit
 
 @ctypes.CFUNCTYPE(None, ctypes.c_char_p)
@@ -206,7 +176,7 @@ def _native_kill(reason_cstr: bytes) -> None:
     except Exception:
         reason = str(reason_cstr)
 
-    # Печатаем яркое сообщение об обнаружении
+    
     msg = (
         f"\n[ANTIDEBUG] VIOLATION DETECTED\n"
         f"[ANTIDEBUG] Reason: {reason}\n"
@@ -221,15 +191,6 @@ def _native_kill(reason_cstr: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 class AntiDebugLLVM:
-    """
-    Компилирует нативные проверки в LLVM IR и исполняет через MCJIT.
-
-    Генерируемые функции (x64 calling convention):
-      - check_peb_debug() -> i64 (0 = clean, !=0 = detected)
-      - check_ntquery_debug() -> i64
-      - check_hw_bp() -> i64
-      - check_debugger_present() -> i64
-    """
 
     def __init__(self):
         if not IS_64BIT:
@@ -248,27 +209,27 @@ class AntiDebugLLVM:
         i32 = ir.IntType(32)
         i64 = ir.IntType(64)
 
-        # i64 get_peb_address(void)  — наша Python-side функция, читает GS:[0x60]
+        
         ir.Function(self.module, ir.FunctionType(i64, []), name="get_peb_address")
 
-        # void* GetCurrentProcess(void)
+        
         ir.Function(self.module, ir.FunctionType(i8p, []), name="GetCurrentProcess")
 
-        # i32 IsDebuggerPresent(void)
+        
         ir.Function(self.module, ir.FunctionType(i32, []), name="IsDebuggerPresent")
 
-        # i32 CheckRemoteDebuggerPresent(void* hProcess, i32* pbDebuggerPresent)
+        
         ir.Function(self.module, ir.FunctionType(i32, [i8p, ir.PointerType(i32)]),
                     name="CheckRemoteDebuggerPresent")
 
-        # i32 NtQueryInformationProcess(void* hProc, i32 cls, void* buf, i32 len, i32* retlen)
+        
         ir.Function(self.module, ir.FunctionType(i32, [i8p, i32, i8p, i32, ir.PointerType(i32)]),
                     name="NtQueryInformationProcess")
 
-        # void* GetCurrentThread(void)
+        
         ir.Function(self.module, ir.FunctionType(i8p, []), name="GetCurrentThread")
 
-        # i32 GetThreadContext(void* hThread, void* lpContext)
+        
         ir.Function(self.module, ir.FunctionType(i32, [i8p, i8p]), name="GetThreadContext")
 
     def _build_all_checks(self):
@@ -279,11 +240,6 @@ class AntiDebugLLVM:
         self._build_check_nt_global_flag()
 
     def _build_check_peb(self):
-        """
-        i64 check_peb_debug()
-        Читает PEB.BeingDebugged через external get_peb_address() + offset 0x02.
-        Возвращает 1 если отлаживается, иначе 0.
-        """
         i8p = ir.PointerType(ir.IntType(8))
         i64 = ir.IntType(64)
 
@@ -306,11 +262,6 @@ class AntiDebugLLVM:
         self.funcs["check_peb_debug"] = func
 
     def _build_check_nt_global_flag(self):
-        """
-        i64 check_nt_global_flag()
-        Читает PEB.NtGlobalFlag @ PEB+0xBC (x64).
-        Возвращает 1 если (NtGlobalFlag & 0x70) != 0.
-        """
         i8p = ir.PointerType(ir.IntType(8))
         i32 = ir.IntType(32)
         i64 = ir.IntType(64)
@@ -336,11 +287,6 @@ class AntiDebugLLVM:
         self.funcs["check_nt_global_flag"] = func
 
     def _build_check_ntquery(self):
-        """
-        i64 check_ntquery_debug()
-        Проверяет ProcessDebugPort (7) и ProcessDebugFlags (0x1F).
-        Возвращает 1 если DebugPort != 0 или DebugFlags == 0.
-        """
         i8p = ir.PointerType(ir.IntType(8))
         i32 = ir.IntType(32)
         i64 = ir.IntType(64)
@@ -411,30 +357,14 @@ class AntiDebugLLVM:
         self.funcs["check_ntquery_debug"] = func
 
     def _build_check_hw_bp(self):
-        """
-        i64 check_hw_bp()
-        Проверяет DR0-DR3 текущего потока через GetThreadContext.
-        Возвращает 1 если хоть один DR установлен.
-
-        Упрощённая версия: читаем DR0-DR3 через inline asm (rdmsr не подходит,
-        debug registers доступны только через CONTEXT или kernel).
-        На user-mode проще сделать через ctypes, поэтому здесь заглушка
-        которая всегда возвращает 0, а реальная проверка делается на Python side.
-        """
         fnty = ir.FunctionType(ir.IntType(64), [])
         func = ir.Function(self.module, fnty, name="check_hw_bp")
         block = func.append_basic_block(name="entry")
         builder = ir.IRBuilder(block)
-        # Заглушка — реальная проверка HW BP требует сложной работы с CONTEXT
         builder.ret(ir.Constant(ir.IntType(64), 0))
         self.funcs["check_hw_bp"] = func
 
     def _build_check_debugger_present(self):
-        """
-        i64 check_debugger_present()
-        Вызывает IsDebuggerPresent() и CheckRemoteDebuggerPresent().
-        Возвращает 1 если хоть один вернул TRUE.
-        """
         i8p = ir.PointerType(ir.IntType(8))
         i32 = ir.IntType(32)
         i64 = ir.IntType(64)
@@ -465,16 +395,14 @@ class AntiDebugLLVM:
         self.funcs["check_debugger_present"] = func
 
     def _compile(self):
-        """Компилируем модуль через MCJIT."""
         llvm.initialize_native_target()
         llvm.initialize_native_asmprinter()
         llvm.initialize_native_asmparser()
 
-        # Регистрируем get_peb_address — читает GS:[0x60] через ctypes напрямую
-        # (inline asm с GS-сегментом не работает в MCJIT на Windows MSVC triple)
+        
         @ctypes.CFUNCTYPE(ctypes.c_uint64)
         def _get_peb_address_impl():
-            # NtQueryInformationProcess(ProcessBasicInformation=0) → PebBaseAddress
+            
             class _PBI(ctypes.Structure):
                 _fields_ = [
                     ("Reserved1",      ctypes.c_void_p),
@@ -489,12 +417,12 @@ class AntiDebugLLVM:
                   ctypes.byref(pbi), ctypes.sizeof(pbi), ctypes.byref(rl))
             return pbi.PebBaseAddress
 
-        # Держим ссылку чтобы GC не собрал
+        
         self._get_peb_address_impl = _get_peb_address_impl
         fn_ptr = ctypes.cast(_get_peb_address_impl, ctypes.c_void_p).value
         llvm.add_symbol("get_peb_address", fn_ptr)
 
-        # Регистрируем Windows API символы явно
+        
         def _reg(name, fn):
             llvm.add_symbol(name, ctypes.cast(fn, ctypes.c_void_p).value)
 
@@ -514,7 +442,7 @@ class AntiDebugLLVM:
         self.engine = llvm.create_mcjit_compiler(llvm_mod, target_machine)
         self.engine.finalize_object()
 
-        # Получаем адреса скомпилированных функций
+        
         self.check_peb            = ctypes.CFUNCTYPE(ctypes.c_uint64)(
             self.engine.get_function_address("check_peb_debug"))
         self.check_nt_global_flag = ctypes.CFUNCTYPE(ctypes.c_uint64)(
@@ -527,9 +455,6 @@ class AntiDebugLLVM:
             self.engine.get_function_address("check_debugger_present"))
 
 
-# ---------------------------------------------------------------------------
-# Python-level проверки (модули, потоки)
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Violation:
@@ -579,8 +504,7 @@ class AntiDebugEngine:
         "debugpy",
     }
 
-    # Whitelist модулей — что считаем «легитимным» для данного процесса
-    # Заполняется динамически при старте
+    
     MODULE_WHITELIST: Set[str] = set()
 
     def __init__(self, strict: bool = True):
@@ -599,13 +523,12 @@ class AntiDebugEngine:
         self._baseline_modules = self._enum_modules_toolhelp()
         self._baseline_tids = self._snapshot_tids()
 
-        # Если запущены из Nuitka onefile — добавляем все модули из temp-директории
-        # в baseline, т.к. они могут подгружаться лениво уже после init
+        
         exe_lower = sys.executable.lower()
         if self._is_nuitka_temp_path(exe_lower) or "onefile" in exe_lower:
             self._nuitka_onefile = True
         else:
-            # Проверяем по переменной окружения которую Nuitka выставляет
+            
             self._nuitka_onefile = bool(
                 os.environ.get("NUITKA_ONEFILE_PARENT") or
                 os.environ.get("NUITKA_ONEFILE_BINARY")
