@@ -13,6 +13,9 @@ class StringProtectionTransformer(ast.NodeTransformer):
         self.string_counter = 0
         self.protected_strings = {}
         self.name_gen_settings = name_gen_settings
+        
+        # Track if we're inside a @skip_obf function/class
+        self.skip_obf_depth = 0
 
         # Generate completely random names for helper functions
         self.decode_func_name = self._generate_random_name()
@@ -27,15 +30,57 @@ class StringProtectionTransformer(ast.NodeTransformer):
         else:
             # Generate completely random name without recognizable pattern
             return generate_random_name("_", self.name_gen_settings)
+    
+    def _has_skip_obf_decorator(self, node):
+        """Check if node has @skip_obf decorator"""
+        if not hasattr(node, 'decorator_list'):
+            return False
+        
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name) and decorator.id == 'skip_obf':
+                return True
+            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'skip_obf':
+                return True
+        return False
+    
+    def visit_FunctionDef(self, node):
+        """Track when entering/exiting functions with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
+    
+    def visit_AsyncFunctionDef(self, node):
+        """Track when entering/exiting async functions with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
+    
+    def visit_ClassDef(self, node):
+        """Track when entering/exiting classes with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
 
     def visit_Str(self, node):
         """Handle string literals in older Python versions."""
-
+        if self.skip_obf_depth > 0:
+            return node
         return self._protect_string(node)
 
     def visit_Constant(self, node):
         """Handle string constants in newer Python versions."""
-
+        if self.skip_obf_depth > 0:
+            return node
+        
         if isinstance(node.value, str):
             return self._protect_string(node)
 
@@ -43,6 +88,8 @@ class StringProtectionTransformer(ast.NodeTransformer):
 
     def visit_JoinedStr(self, node):
         """Handle f-strings - convert to helper function calls for better protection."""
+        if self.skip_obf_depth > 0:
+            return node
 
         # Collect all values from the f-string
 

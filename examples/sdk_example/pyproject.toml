@@ -1,0 +1,39 @@
+[project]
+name = "sdk-example"
+version = "1.0.0"
+description = "Example of PyLockWare SDK usage"
+
+[tool.pylockware]
+# Основные параметры
+project_path = "."
+entry_point = "main.py"
+entry_function = "main"
+output_dir = "dist"
+
+# Опции обфускации
+remap = false
+string_prot = true
+num_obf = true
+import_obf = false
+state_machine = true
+builtin_dispatcher = true
+junk_code = true
+decorator_obf = true
+call_obf = false
+disable_traceback = true
+
+# Параметры обфускации
+junk_density = 0.5
+opaque_complexity = "high"
+name_gen = "english"
+banner = "Protected by PyLockWare SDK"
+
+# Анти-отладка
+anti_debug = null
+anti_debug_mode = "native"
+
+# Nuitka опции
+enable_nuitka = false
+nuitka_onefile = true
+nuitka_standalone = true
+nuitka_disable_console = false

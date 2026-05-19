@@ -4,6 +4,7 @@ AST Transformer for remapping identifiers in Python code
 import ast
 import builtins
 from pylockware.core.name_generator import NameGenerator
+from pylockware.decorators import is_external, should_skip_obfuscation
 
 
 class GlobalRenamer(ast.NodeTransformer):
@@ -144,17 +145,40 @@ class GlobalRenamer(ast.NodeTransformer):
         return node
 
     def visit_FunctionDef(self, node):
-        # Rename function name if it's in the remap map
-        if node.name in self.global_replacements:
+        # Проверяем аннотации PyLockWare
+        # Если функция помечена как @external, не переименовываем её
+        is_external_func = False
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name) and decorator.id == 'external':
+                is_external_func = True
+                break
+            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'external':
+                is_external_func = True
+                break
+        
+        # Rename function name if it's in the remap map and not external
+        if not is_external_func and node.name in self.global_replacements:
             node.name = self.global_replacements[node.name]
+        
         # Visit the body of the function
         self.generic_visit(node)
         return node
 
     def visit_AsyncFunctionDef(self, node):
-        # Rename async function name if it's in the remap map
-        if node.name in self.global_replacements:
+        # Проверяем аннотации PyLockWare
+        is_external_func = False
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name) and decorator.id == 'external':
+                is_external_func = True
+                break
+            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'external':
+                is_external_func = True
+                break
+        
+        # Rename async function name if it's in the remap map and not external
+        if not is_external_func and node.name in self.global_replacements:
             node.name = self.global_replacements[node.name]
+        
         # Visit the body of the function
         self.generic_visit(node)
         return node
@@ -170,8 +194,18 @@ class GlobalRenamer(ast.NodeTransformer):
                         self.pydantic_classes.add(child.name)
 
     def visit_ClassDef(self, node):
-        # Rename class name if it's in the remap map
-        if node.name in self.global_replacements:
+        # Проверяем аннотации PyLockWare
+        is_external_class = False
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name) and decorator.id == 'external':
+                is_external_class = True
+                break
+            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'external':
+                is_external_class = True
+                break
+        
+        # Rename class name if it's in the remap map and not external
+        if not is_external_class and node.name in self.global_replacements:
             node.name = self.global_replacements[node.name]
         
         # If this is a Pydantic model, protect its field names from renaming

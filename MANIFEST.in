@@ -1,0 +1,25 @@
+include README.md
+include LICENSE
+include requirements.txt
+
+recursive-include pylockware/anti_debug *.dll *.py
+recursive-include pylockware *.py
+
+exclude cli.py
+exclude gui.py
+exclude pylockware_sdk.py
+
+recursive-exclude tests *
+recursive-exclude examples *
+recursive-exclude tools *
+recursive-exclude crackme *
+recursive-exclude native_src *
+recursive-exclude dist *
+recursive-exclude nuitka_dist *
+recursive-exclude .git *
+recursive-exclude .idea *
+recursive-exclude .venv *
+recursive-exclude .vs *
+recursive-exclude __pycache__ *
+recursive-exclude *.pyc *
+recursive-exclude *.pyo *

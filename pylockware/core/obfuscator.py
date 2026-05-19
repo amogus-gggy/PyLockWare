@@ -25,6 +25,7 @@ from pylockware.modules.junk_code_module import JunkCodeModule
 from pylockware.modules.decorator_obf_module import DecoratorObfModule
 from pylockware.modules.type_annotation_obf_module import TypeAnnotationObfModule
 from pylockware.modules.call_obf_module import CallObfModule
+from pylockware.modules.remove_annotations_module import RemoveAnnotationsModule
 
 
 class PyObfuscator:
@@ -215,6 +216,9 @@ class PyObfuscator:
         # Add Nuitka module LAST so it runs after all obfuscation
         if self.enable_nuitka:
             self.module_manager.add_module(self.nuitka_module)
+        
+        # Add RemoveAnnotations module ABSOLUTELY LAST to clean up decorators
+        self.module_manager.add_module(RemoveAnnotationsModule({}))
 
     def validate_paths(self):
         """

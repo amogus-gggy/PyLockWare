@@ -250,9 +250,54 @@ class NumberObfuscator(ast.NodeTransformer):
     def __init__(self):
         self.number_counter = 0
         self.required_imports = set()  # Track required imports
+        
+        # Track if we're inside a @skip_obf function/class
+        self.skip_obf_depth = 0
+    
+    def _has_skip_obf_decorator(self, node):
+        """Check if node has @skip_obf decorator"""
+        if not hasattr(node, 'decorator_list'):
+            return False
+        
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name) and decorator.id == 'skip_obf':
+                return True
+            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'skip_obf':
+                return True
+        return False
+    
+    def visit_FunctionDef(self, node):
+        """Track when entering/exiting functions with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
+    
+    def visit_AsyncFunctionDef(self, node):
+        """Track when entering/exiting async functions with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
+    
+    def visit_ClassDef(self, node):
+        """Track when entering/exiting classes with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
 
     def visit_Constant(self, node):
         """Handle numeric constants in newer Python versions."""
+        # Skip if inside @skip_obf context
+        if self.skip_obf_depth > 0:
+            return node
 
         if isinstance(node.value, int) and not isinstance(node.value, bool):
             # Obfuscate the number regardless of size
@@ -277,6 +322,7 @@ class NumberObfuscator(ast.NodeTransformer):
         elif isinstance(node.value, float):
             # Obfuscate the float value
             obfuscated_expr = obfuscate_float(node.value)
+
 
             # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:

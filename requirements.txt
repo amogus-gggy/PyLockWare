@@ -5,3 +5,7 @@ pyside6-fluent-widgets
 nuitka==4.0.8
 ordered-set
 zstandard
+
+# SDK dependencies
+tomli>=2.0.0
+tomli-w>=1.0.0

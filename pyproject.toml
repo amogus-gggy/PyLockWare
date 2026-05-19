@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm[toml]>=6.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pylockware"
+version = "3.0.0"
+description = "Python Code Protection SDK with obfuscation and anti-debug features"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "PyLockWare Team"}
+]
+keywords = ["obfuscation", "protection", "security", "anti-debug", "code-protection"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Security",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+dependencies = [
+    "tomli>=2.0.0; python_version<'3.11'",
+    "tomli-w>=1.0.0",
+    "psutil>=5.0.0",
+]
+
+[project.optional-dependencies]
+gui = [
+    "PySide6>=6.0.0",
+    "pyside6-fluent-widgets",
+]
+nuitka = [
+    "nuitka>=1.0.0",
+    "ordered-set",
+    "zstandard",
+]
+full = [
+    "PySide6>=6.0.0",
+    "pyside6-fluent-widgets",
+    "nuitka>=1.0.0",
+    "ordered-set",
+    "zstandard",
+    "pywin32; platform_system=='Windows'",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=3.0.0",
+    "black>=22.0.0",
+    "flake8>=4.0.0",
+    "mypy>=0.950",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/pylockware"
+Documentation = "https://github.com/yourusername/pylockware/blob/main/SDK_README.md"
+Repository = "https://github.com/yourusername/pylockware"
+"Bug Tracker" = "https://github.com/yourusername/pylockware/issues"
+
+[project.scripts]
+pylockware = "pylockware.cli.build:main"
+pylockware-cli = "pylockware.cli.main:main_cli"
+
+[project.gui-scripts]
+pylockware-gui = "pylockware.gui.main:main_gui"
+
+[tool.setuptools]
+packages = ["pylockware", "pylockware.core", "pylockware.modules", "pylockware.transforms", "pylockware.anti_debug", "pylockware.cli", "pylockware.gui", "pylockware.sdk"]
+
+[tool.setuptools.package-data]
+pylockware = ["anti_debug/*.dll", "anti_debug/*.py"]
+
+[tool.black]
+line-length = 120
+target-version = ['py38', 'py39', 'py310', 'py311', 'py312']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=pylockware --cov-report=html --cov-report=term"
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false

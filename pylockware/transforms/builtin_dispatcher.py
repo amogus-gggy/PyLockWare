@@ -38,6 +38,48 @@ class BuiltinDispatcherTransformer(ast.NodeTransformer):
         self.dispatcher_name = generate_random_name('_', name_gen_settings)
         self.builtins_map: Dict[str, str] = {}
         self.imported_builtins = set()
+        
+        # Track if we're inside a @skip_obf function/class
+        self.skip_obf_depth = 0
+    
+    def _has_skip_obf_decorator(self, node):
+        """Check if node has @skip_obf decorator"""
+        if not hasattr(node, 'decorator_list'):
+            return False
+        
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name) and decorator.id == 'skip_obf':
+                return True
+            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'skip_obf':
+                return True
+        return False
+    
+    def visit_FunctionDef(self, node):
+        """Track when entering/exiting functions with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
+    
+    def visit_AsyncFunctionDef(self, node):
+        """Track when entering/exiting async functions with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
+    
+    def visit_ClassDef(self, node):
+        """Track when entering/exiting classes with @skip_obf"""
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            return node
+        return self.generic_visit(node)
 
     def _get_builtin_attr(self, builtin_name: str) -> ast.Attribute:
         """
@@ -78,6 +120,10 @@ class BuiltinDispatcherTransformer(ast.NodeTransformer):
         """
         Заменяет вызовы built-in функций на вызовы через dispatcher
         """
+        # Skip if inside @skip_obf context
+        if self.skip_obf_depth > 0:
+            return self.generic_visit(node)
+        
         # Прямой вызов: print() -> _dispatcher.ghjfkd()
         if isinstance(node.func, ast.Name):
             if node.func.id in BUILTIN_FUNCTIONS:

@@ -561,6 +561,15 @@ class StateMachineTransformer(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_FunctionDef(self, node):
+        # Check for @skip_obf decorator
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name) and decorator.id == 'skip_obf':
+                print(f"[STATE_MACHINE] Skipping function (has @skip_obf): {node.name}")
+                return self.generic_visit(node)
+            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'skip_obf':
+                print(f"[STATE_MACHINE] Skipping function (has @skip_obf): {node.name}")
+                return self.generic_visit(node)
+        
         # Skip functions that contain async - they're handled by visit_AsyncFunctionDef
         if self._contains_async(node):
             print(f"[STATE_MACHINE] Skipping function (contains async): {node.name}")

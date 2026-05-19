@@ -581,6 +581,15 @@ class JunkCodeTransformer(ast.NodeTransformer):
     
     def visit_FunctionDef(self, node):
         """Add junk code to function definitions."""
+        # Check for @skip_obf decorator
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Name) and decorator.id == 'skip_obf':
+                print(f"[JUNK_CODE] Skipping function (has @skip_obf): {node.name}")
+                return self.generic_visit(node)
+            elif isinstance(decorator, ast.Attribute) and decorator.attr == 'skip_obf':
+                print(f"[JUNK_CODE] Skipping function (has @skip_obf): {node.name}")
+                return self.generic_visit(node)
+        
         # Randomly decide whether to add junk to this function
         if random.random() > self.junk_density:
             return self.generic_visit(node)

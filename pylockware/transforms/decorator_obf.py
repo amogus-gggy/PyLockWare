@@ -16,10 +16,48 @@ class DecoratorObfuscator(ast.NodeTransformer):
     becomes:
         def func(): pass
         func = dec1(dec2(arg)(func))
+    
+    IMPORTANT: Preserves PyLockWare decorators (@external, @skip_obf) as they are
+    needed for obfuscation control.
     """
+    
+    # PyLockWare decorators that should NOT be obfuscated
+    PYLOCKWARE_DECORATORS = {'external', 'skip_obf', 'preserve_name'}
 
     def __init__(self, name_gen_settings='english'):
         self.name_gen_settings = name_gen_settings
+    
+    def _is_pylockware_decorator(self, dec):
+        """Check if decorator is a PyLockWare decorator"""
+        # Simple name: @external
+        if isinstance(dec, ast.Name) and dec.id in self.PYLOCKWARE_DECORATORS:
+            return True
+        
+        # Attribute: @pylockware.external
+        if isinstance(dec, ast.Attribute):
+            if dec.attr in self.PYLOCKWARE_DECORATORS:
+                return True
+            # Check if it's from pylockware module
+            if isinstance(dec.value, ast.Name) and dec.value.id == 'pylockware':
+                return True
+        
+        return False
+    
+    def _filter_decorators(self, decorator_list):
+        """
+        Split decorators into PyLockWare and regular decorators.
+        Returns: (pylockware_decorators, regular_decorators)
+        """
+        pylockware_decs = []
+        regular_decs = []
+        
+        for dec in decorator_list:
+            if self._is_pylockware_decorator(dec):
+                pylockware_decs.append(dec)
+            else:
+                regular_decs.append(dec)
+        
+        return pylockware_decs, regular_decs
 
     def _build_decorated_assignment(self, target_name, decorator_list, is_async=False):
         """
@@ -63,14 +101,18 @@ class DecoratorObfuscator(ast.NodeTransformer):
         self.generic_visit(node)
         
         if node.decorator_list:
-            # Build the assignment
-            assignment = self._build_decorated_assignment(node.name, node.decorator_list)
-            ast.fix_missing_locations(assignment)
-            # Store assignment to be added after the node by parent
-            # We'll add it as a sibling by appending to a wrapper
-            node._decorator_assignment = assignment
-            # Remove decorators from the function
-            node.decorator_list = []
+            # Separate PyLockWare decorators from regular decorators
+            pylockware_decs, regular_decs = self._filter_decorators(node.decorator_list)
+            
+            # Only obfuscate regular decorators
+            if regular_decs:
+                # Build the assignment for regular decorators
+                assignment = self._build_decorated_assignment(node.name, regular_decs)
+                ast.fix_missing_locations(assignment)
+                node._decorator_assignment = assignment
+            
+            # Keep PyLockWare decorators on the function
+            node.decorator_list = pylockware_decs
 
         return node
 
@@ -79,10 +121,17 @@ class DecoratorObfuscator(ast.NodeTransformer):
         self.generic_visit(node)
         
         if node.decorator_list:
-            assignment = self._build_decorated_assignment(node.name, node.decorator_list, is_async=True)
-            ast.fix_missing_locations(assignment)
-            node._decorator_assignment = assignment
-            node.decorator_list = []
+            # Separate PyLockWare decorators from regular decorators
+            pylockware_decs, regular_decs = self._filter_decorators(node.decorator_list)
+            
+            # Only obfuscate regular decorators
+            if regular_decs:
+                assignment = self._build_decorated_assignment(node.name, regular_decs, is_async=True)
+                ast.fix_missing_locations(assignment)
+                node._decorator_assignment = assignment
+            
+            # Keep PyLockWare decorators on the function
+            node.decorator_list = pylockware_decs
 
         return node
 
@@ -91,10 +140,17 @@ class DecoratorObfuscator(ast.NodeTransformer):
         self.generic_visit(node)
         
         if node.decorator_list:
-            assignment = self._build_decorated_assignment(node.name, node.decorator_list)
-            ast.fix_missing_locations(assignment)
-            node._decorator_assignment = assignment
-            node.decorator_list = []
+            # Separate PyLockWare decorators from regular decorators
+            pylockware_decs, regular_decs = self._filter_decorators(node.decorator_list)
+            
+            # Only obfuscate regular decorators
+            if regular_decs:
+                assignment = self._build_decorated_assignment(node.name, regular_decs)
+                ast.fix_missing_locations(assignment)
+                node._decorator_assignment = assignment
+            
+            # Keep PyLockWare decorators on the class
+            node.decorator_list = pylockware_decs
 
         return node
 
