@@ -11,7 +11,7 @@ long_description = readme_file.read_text(encoding="utf-8") if readme_file.exists
 
 setup(
     name="pylockware",
-    version="3.0.0",
+    version="2.0.1",
     author="PyLockWare Team",
     description="Python Code Protection SDK with obfuscation and anti-debug features",
     long_description=long_description,
