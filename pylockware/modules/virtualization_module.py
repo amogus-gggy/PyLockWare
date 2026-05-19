@@ -12,8 +12,8 @@ import shutil
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-# Add CustomVM to path
-customvm_path = Path(__file__).parent.parent.parent / "CustomVM"
+# Add vendor CustomVM to path
+customvm_path = Path(__file__).parent.parent / "vendor"
 if str(customvm_path) not in sys.path:
     sys.path.insert(0, str(customvm_path))
 
@@ -89,8 +89,8 @@ class VirtualizationModule(ModuleBase):
         """
         print("[Virtualization] Embedding CustomVM runtime...")
         
-        # Source CustomVM directory
-        customvm_src = Path(__file__).parent.parent.parent / "CustomVM" / "customvm"
+        # Source CustomVM directory (from vendor)
+        customvm_src = Path(__file__).parent.parent / "vendor" / "customvm"
         
         if not customvm_src.exists():
             print(f"[Virtualization] ERROR: CustomVM not found at {customvm_src}")
@@ -203,21 +203,11 @@ def vmentry(bytecode_file: str, *args, **kwargs):
             func_pool = []
             string_pool = []
         
-        # WORKAROUND: Replace placeholder string with actual argument
-        # The compiled code has an empty string "" as placeholder
-        # We replace the first empty string in string_pool with the actual argument
-        if args and string_pool:
-            # Find and replace empty string placeholder
-            for i, s in enumerate(string_pool):
-                if s == "":
-                    string_pool[i] = str(args[0]) if args[0] is not None else ""
-                    break
-            else:
-                # No empty string found, prepend argument
-                string_pool.insert(0, str(args[0]) if args[0] is not None else "")
-        elif args:
-            # No string pool, create one with the argument
-            string_pool = [str(args[0]) if args[0] is not None else ""]
+        # Inject arguments into const_pool
+        # The compiled code expects arguments at the beginning of const_pool
+        if args:
+            # Prepend arguments to const_pool (keeping their original types)
+            const_pool = list(args) + list(const_pool)
         
         vm = VirtualMachine()
         vm.load_bytecode(code, opcode_set, crypto, const_pool, integrity_hash, func_pool, string_pool)
@@ -225,7 +215,6 @@ def vmentry(bytecode_file: str, *args, **kwargs):
         # Execute the VM
         result = vm.execute()
         
-        # If result is a string, return it; otherwise return as-is
         return result
         
     except Exception as e:
@@ -305,17 +294,16 @@ class VirtualizationTransformer(ast.NodeTransformer):
             param_names = [arg.arg for arg in func_node.args.args]
             
             # Create inline version of function body
-            # For functions with parameters, we'll create code that loads from string pool
+            # For functions with parameters, we'll load them from const_pool
             
             if len(param_names) == 1:
                 # Single parameter function
-                # We'll inject the parameter value at index 0 of string pool
-                # Create code that loads it and assigns to the parameter name
+                # Load parameter from const_pool[0] (injected by vmentry)
                 param_name = param_names[0]
                 
-                # Create wrapper that loads argument from string pool index 0
-                wrapper_source = f"""# Load parameter from string pool
-{param_name} = ""  # Placeholder, will be replaced by VM runtime
+                # Create wrapper that loads argument from const_pool index 0
+                wrapper_source = f"""# Load parameter from const_pool
+{param_name} = 0  # Placeholder constant, will be replaced by vmentry
 # Function body:
 """
                 for stmt in func_node.body:
@@ -327,10 +315,10 @@ class VirtualizationTransformer(ast.NodeTransformer):
                 for stmt in func_node.body:
                     wrapper_source += ast.unparse(stmt) + "\n"
             else:
-                # Multiple parameters
-                wrapper_source = "# Multiple parameters\n"
+                # Multiple parameters - load from const_pool[0], const_pool[1], etc.
+                wrapper_source = "# Load parameters from const_pool\n"
                 for i, param in enumerate(param_names):
-                    wrapper_source += f'{param} = "arg{i}"\n'
+                    wrapper_source += f'{param} = {i}  # Placeholder, will be replaced by vmentry\n'
                 for stmt in func_node.body:
                     wrapper_source += ast.unparse(stmt) + "\n"
             

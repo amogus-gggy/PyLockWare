@@ -9,7 +9,7 @@ output_dir = "dist"
 # Obfuscation Options
 remap = false
 string_prot = true
-num_obf = true
+num_obf = false
 import_obf = false
 state_machine = true
 builtin_dispatcher = true
