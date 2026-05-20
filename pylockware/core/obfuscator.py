@@ -103,16 +103,10 @@ class PyObfuscator:
         For production protection, use dedicated protectors like Themida, VMProtect, etc.
         """
         if self.enable_nuitka:
-            # Disable anti-debug with Nuitka
             if self.anti_debug:
-                print(f"WARNING: Anti-debug is incompatible with Nuitka EXE packaging.")
-                print(f"         Anti-debug has been disabled.")
                 self.anti_debug = None
             
-            # Disable import obfuscation with Nuitka
             if self.import_obf:
-                print(f"WARNING: Import obfuscation is incompatible with Nuitka EXE packaging.")
-                print(f"         Import obfuscation has been disabled.")
                 self.import_obf = False
 
     def setup_modules(self):
@@ -199,7 +193,7 @@ class PyObfuscator:
             state_machine_config = {
                 'name_gen': self.name_gen,
                 'entry_point': str(self.entry_point),
-                'add_junk_states': True  # Добавлять мусорные состояния
+                'add_junk_states': True
             }
             self.module_manager.add_module(StateMachineModule(state_machine_config))
 
@@ -207,12 +201,11 @@ class PyObfuscator:
             num_obf_config = {'name_gen': self.name_gen}
             self.module_manager.add_module(NumberObfModule(num_obf_config))
 
-        
         # Decorator obfuscation - converts @decorator to explicit assignments
-        #module disabled due to conflict with annotations
-        #if self.decorator_obf:
-        #    decorator_obf_config = {'name_gen': self.name_gen}
-        #    self.module_manager.add_module(DecoratorObfModule(decorator_obf_config))
+        # Module disabled due to conflict with annotations
+        # if self.decorator_obf:
+        #     decorator_obf_config = {'name_gen': self.name_gen}
+        #     self.module_manager.add_module(DecoratorObfModule(decorator_obf_config))
 
         if self.builtin_dispatcher:
             builtin_dispatcher_config = {'name_gen': self.name_gen}
@@ -224,20 +217,14 @@ class PyObfuscator:
         #     self.module_manager.add_module(TypeAnnotationObfModule(type_annotation_obf_config))
 
         # Add disable traceback module BEFORE Nuitka (if enabled)
-        # This needs to be done before Nuitka compiles the files
         if self.disable_traceback:
             from pylockware.modules.disable_traceback_module import DisableTracebackModule
             self.module_manager.add_module(DisableTracebackModule({}))
-
-
-
-
         # Add Nuitka module LAST so it runs after all obfuscation
         if self.enable_nuitka:
             self.module_manager.add_module(self.nuitka_module)
         
         # Add RemoveAnnotations module ABSOLUTELY LAST to clean up decorators
-        # This removes @virtualize AFTER virtualization has processed them
         self.module_manager.add_module(RemoveAnnotationsModule({}))
 
     def validate_paths(self):
@@ -259,37 +246,20 @@ class PyObfuscator:
         """
         Main method to run the obfuscation process using modules
         """
-        print(f"Starting obfuscation of project: {self.project_path}")
-        print(f"Entry point: {self.entry_point}")
-        print(f"Entry function: {self.entry_function}")
-        print(f"Modules enabled: remap={self.remap}, anti_debug={self.anti_debug}, string_prot={self.string_prot}, num_obf={self.num_obf}, import_obf={self.import_obf}, state_machine={self.state_machine}, builtin_dispatcher={self.builtin_dispatcher}, junk_code={self.junk_code}, call_obf={self.call_obf}")
-        print(f"Name generator settings: {self.name_gen}")
-        if self.enable_nuitka:
-            print(f"Nuitka packaging: enabled (onefile={self.nuitka_onefile})")
-
-        # Validate paths
         self.validate_paths()
-
-        # Run all modules
         success = self.module_manager.run_modules()
 
         if not success:
-            print("Obfuscation failed due to module execution error")
             return False
 
-        # Get all modules from the output directory to add banners
         modules = []
         for py_file in self.output_dir.rglob("*.py"):
-            # Include all Python files except the obfuscator script itself
             if py_file.name != "obfuscator.py":
                 modules.append(py_file)
 
-        # Add banner to each module
         for module in modules:
             self.add_banner_to_module(module, banner_text)
-            print(f"Added banner to: {module}")
 
-        print(f"Obfuscation process completed! Output saved to: {self.output_dir}")
         return True
 
     def add_banner_to_module(self, module_path: Path, banner: str):
