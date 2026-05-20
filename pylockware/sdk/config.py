@@ -41,7 +41,7 @@ class BuildConfig:
     
     # Анти-отладка
     anti_debug: Optional[str] = None  # None, 'native', 'crossplatform'
-    anti_debug_mode: str = "native"
+    anti_debug_mode: str = "crossplatform"
     
     # Nuitka опции
     enable_nuitka: bool = False
@@ -177,6 +177,8 @@ def _save_pretty_toml(data: dict, path: Path, config: BuildConfig) -> None:
     lines.append(f"call_obf = {str(config.call_obf).lower()}")
     lines.append(f"disable_traceback = {str(config.disable_traceback).lower()}")
     lines.append(f"virtualization = {str(config.virtualization).lower()}")
+    lines.append("")
+
     
     lines.append("# Obfuscation Parameters")
     lines.append(f"junk_density = {config.junk_density}")
@@ -308,7 +310,7 @@ def _create_scaffold(project_dir: Path, config: BuildConfig) -> None:
 
 
 def _get_main_template(entry_function: str) -> str:
-    """Возвращает шаблон main.py"""
+    """Returns main.py template"""
     return f'''"""
 PyLockWare Protected Application
 """
@@ -316,48 +318,57 @@ PyLockWare Protected Application
 from pylockware import external, skip_obf
 
 
+# === PUBLIC API (names preserved) ===
+
 @external
-def public_api(message: str) -> str:
-    """
-    Public API function - name will be preserved.
-    Use @external for functions that need to be called from outside.
-    """
-    return process_message(message)
+def greet(name: str) -> str:
+    """Public — visible from outside"""
+    return _format_greeting(name)
 
 
-def process_message(message: str) -> str:
-    """
-    Internal function - will be obfuscated.
-    This function will have full obfuscation applied.
-    """
-    return message.upper()
+@external
+def add(a: int, b: int) -> int:
+    """Public — visible from outside"""
+    return _calculate(a, b)
 
+
+# === INTERNAL (will be obfuscated) ===
+
+def _format_greeting(name: str) -> str:
+    """Internal — will be obfuscated"""
+    return f"Hello, {{name.title()}}!"
+
+
+def _calculate(x: int, y: int) -> int:
+    """Internal — will be obfuscated"""
+    return (x * 2 + y * 3) % 1000
+
+
+# === DEBUG (remove @skip_obf in production!) ===
 
 @skip_obf
-def debug_info():
-    """
-    Debug function - will not be obfuscated.
-    Use @skip_obf only during development, remove in production.
-    """
-    print("[DEBUG] Application is running")
-    print("[DEBUG] This function is not obfuscated for easier debugging")
+def debug_status():
+    """DEBUG: not obfuscated! Remove @skip_obf before release."""
+    print("[DEBUG] App running — internal logic exposed for debugging")
 
 
+# === ENTRY POINT ===
+
+@external
 def {entry_function}():
     """Main entry point"""
-    print("=" * 60)
-    print("PyLockWare Protected Application")
-    print("=" * 60)
-    
-    # Call public API
-    result = public_api("hello world")
-    print(f"Result: {{result}}")
-    
-    # Debug info (remove in production)
-    debug_info()
-    
-    print("=" * 60)
-    print("Application completed successfully!")
+    print("=" * 40)
+    print("PyLockWare Protected App")
+    print("=" * 40)
+
+    # Public API demo
+    print(greet("world"))
+    print(f"Result: {{add(10, 20)}}")
+
+    # Debug (remove in production)
+    debug_status()
+
+    print("=" * 40)
 
 
 if __name__ == "__main__":
