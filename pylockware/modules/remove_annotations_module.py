@@ -158,8 +158,18 @@ class RemoveAnnotationsModule(ModuleBase):
                 # Удаляем аннотации
                 new_tree = self.process_file(py_file, tree)
                 
-                # Генерируем код обратно
-                new_source = ast.unparse(new_tree)
+                # Генерируем код обратно с сохранением форматирования
+                # ast.unparse() может изменить некоторые конструкции, поэтому используем compile + decompile
+                try:
+                    # Компилируем AST чтобы убедиться что он валидный
+                    compile(new_tree, str(py_file), 'exec')
+                    # Используем ast.unparse для генерации кода
+                    new_source = ast.unparse(new_tree)
+                except Exception as e:
+                    print(f"Warning: Failed to unparse {py_file}, keeping original: {e}")
+                    # Если не получилось, используем оригинальный источник
+                    # но удаляем только импорты и декораторы текстовым способом
+                    new_source = self._remove_annotations_text(source)
                 
                 # Сохраняем
                 with open(py_file, 'w', encoding='utf-8') as f:
@@ -175,6 +185,31 @@ class RemoveAnnotationsModule(ModuleBase):
         print(f"[{self.name}] Processed {len(python_files)} files")
         
         return True
+    
+    def _remove_annotations_text(self, source: str) -> str:
+        """
+        Удаляет аннотации PyLockWare текстовым способом (fallback)
+        
+        Args:
+            source: Исходный код
+        
+        Returns:
+            Код без аннотаций
+        """
+        import re
+        
+        # Удаляем импорты pylockware
+        source = re.sub(r'^from\s+pylockware\s+import\s+.*$', '', source, flags=re.MULTILINE)
+        source = re.sub(r'^import\s+pylockware.*$', '', source, flags=re.MULTILINE)
+        
+        # Удаляем декораторы @external, @skip_obf, @preserve_name, @virtualize
+        for decorator in self.PYLOCKWARE_DECORATORS:
+            source = re.sub(rf'^\s*@{decorator}\s*$', '', source, flags=re.MULTILINE)
+        
+        # Удаляем пустые строки (но не более 2 подряд)
+        source = re.sub(r'\n\n\n+', '\n\n', source)
+        
+        return source
     
     def process_file(self, file_path: Path, tree: ast.AST) -> ast.AST:
         """

@@ -183,9 +183,7 @@ class PyObfuscator:
             import_obf_config = {'name_gen': self.name_gen}
             self.module_manager.add_module(ImportObfuscateModule(import_obf_config))
 
-        if self.num_obf:
-            num_obf_config = {'name_gen': self.name_gen}
-            self.module_manager.add_module(NumberObfModule(num_obf_config))
+        
 
         # Junk code BEFORE state machine - so state machine transforms the junk code too
         if self.junk_code:
@@ -205,6 +203,11 @@ class PyObfuscator:
             }
             self.module_manager.add_module(StateMachineModule(state_machine_config))
 
+        if self.num_obf:
+            num_obf_config = {'name_gen': self.name_gen}
+            self.module_manager.add_module(NumberObfModule(num_obf_config))
+
+        
         # Decorator obfuscation - converts @decorator to explicit assignments
         #module disabled due to conflict with annotations
         #if self.decorator_obf:
