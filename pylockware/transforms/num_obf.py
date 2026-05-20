@@ -8,7 +8,6 @@ import os
 from multiprocessing import Pool, cpu_count
 from functools import partial
 
-
 OPS = {
     '+': operator.add,
     '-': operator.sub,
@@ -21,7 +20,6 @@ OPS = {
     '&': operator.and_,
     '|': operator.or_,
 }
-
 
 def atomic_expr(n: int) -> str:
     """
@@ -73,7 +71,6 @@ def atomic_expr(n: int) -> str:
         f"(({n + k} + (os.getpid() % {k})) - (os.getpid() % {k}) - {k})",  # PID noise
     ]
     return random.choice(noise_techniques)
-
 
 def build_expr(target: int, depth: int, max_depth: int) -> str:
     if depth >= max_depth:
@@ -170,7 +167,6 @@ def build_expr(target: int, depth: int, max_depth: int) -> str:
         # Fallback to atomic expression on any arithmetic error
         return atomic_expr(target)
 
-
 def _create_function_based_expr(target: int) -> str:
     """Create function-based expressions to prevent compiler inlining"""
     techniques = [
@@ -202,7 +198,6 @@ def _create_function_based_expr(target: int) -> str:
 
     return random.choice(techniques)()
 
-
 def obfuscate_number(n: int) -> str:
     try:
         # Sometimes use pure function-based expressions for better anti-inlining
@@ -223,7 +218,6 @@ def obfuscate_number(n: int) -> str:
         # Ultimate fallback: return the number as-is
         return str(n)
 
-
 def _obfuscate_number_worker(n: int) -> tuple:
     """Worker function for parallel number obfuscation"""
     try:
@@ -236,7 +230,6 @@ def _obfuscate_number_worker(n: int) -> tuple:
     except Exception as e:
         # Return original number on any error
         return (n, str(n), False)
-
 
 def obfuscate_numbers_parallel(numbers: list) -> dict:
     """
@@ -276,14 +269,12 @@ def obfuscate_numbers_parallel(numbers: list) -> dict:
             result[n] = obfuscate_number(n)
         return result
 
-
 def get_imports_for_obfuscated_code() -> str:
     """
     Returns import statements needed for the obfuscated code to work.
     These imports are required for runtime-dependent expressions.
     """
     return "import os\nimport time\nimport sys\n"
-
 
 def obfuscate_float(n: float) -> str:
     """
@@ -310,7 +301,6 @@ def obfuscate_float(n: float) -> str:
     ]
 
     return random.choice(float_techniques)
-
 
 class NumberObfuscator(ast.NodeTransformer):
     """AST transformer to obfuscate integer and float literals in Python code."""
@@ -419,7 +409,6 @@ class NumberObfuscator(ast.NodeTransformer):
             # Obfuscate the float value
             obfuscated_expr = obfuscate_float(node.value)
 
-
             # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
@@ -497,7 +486,6 @@ class NumberObfuscator(ast.NodeTransformer):
         if 'sys' in self.required_imports:
             imports.append('import sys')
         return '\n'.join(imports) if imports else ''
-
 
 class NumberCollector(ast.NodeVisitor):
     """Visitor to collect all numbers in the AST for batch processing"""

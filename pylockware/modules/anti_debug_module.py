@@ -40,23 +40,17 @@ class AntiDebugModule(ModuleBase):
     def process(self, project_path: Path, output_path: Path) -> bool:
         import platform, sys
         try:
-            # Determine which mode to use
             is_windows_amd64 = sys.platform == 'win32' and platform.machine().lower() in ['amd64', 'x86_64']
             
             if self.mode == 'crossplatform' or not is_windows_amd64:
-                # Use cross-platform mode
                 src = Path(__file__).parent.parent / 'anti_debug' / 'antidebug_crossplatform.py'
                 dst_name = f'{_PROTECTION_MODULE_CROSSPLATFORM}.py'
                 inject_code = _INJECT_CODE_CROSSPLATFORM
-                print(f"Anti-debug: using cross-platform mode")
             else:
-                # Use native LLVM mode (Windows AMD64 only)
                 src = Path(__file__).parent.parent / 'anti_debug' / 'antidebug_llvm.py'
                 dst_name = f'{_PROTECTION_MODULE_LLVM}.py'
                 inject_code = _INJECT_CODE_NATIVE
-                print(f"Anti-debug: using native LLVM mode")
 
-            # Copy the appropriate anti-debug module
             shutil.copy(str(src), str(output_path / dst_name))
 
             entry_point = self.config.get('entry_point')
@@ -74,7 +68,6 @@ class AntiDebugModule(ModuleBase):
 
             return True
         except Exception as e:
-            print(f"Anti-debug error: {e}")
             return False
 
     def validate_config(self) -> bool:

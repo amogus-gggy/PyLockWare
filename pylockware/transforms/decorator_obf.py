@@ -5,7 +5,6 @@ Converts @decorator syntax to explicit assignment: func = decorator(func)
 import ast
 from pylockware.core.name_generator import generate_random_name
 
-
 class DecoratorObfuscator(ast.NodeTransformer):
     """
     Converts @decorator syntax to explicit assignments to make code harder to analyze.
@@ -180,16 +179,15 @@ class DecoratorObfuscator(ast.NodeTransformer):
         Apply decorator obfuscation to Python code.
         """
         try:
-            print(f"[DECORATOR_OBF] Starting transformation...")
+
             tree = ast.parse(code)
             transformed_tree = self.visit(tree)
             ast.fix_missing_locations(transformed_tree)
             result = ast.unparse(transformed_tree)
 
-            print(f"[DECORATOR_OBF] Transformation complete. Code changed: {result != code}")
             return result
         except Exception as e:
-            print(f"Decorator obfuscation failed: {e}")
+
             import traceback
             traceback.print_exc()
             return code

@@ -8,7 +8,6 @@ import random
 import string
 from pylockware.core.name_generator import generate_random_name
 
-
 class StateMachineTransformer(ast.NodeTransformer):
     def __init__(self, name_gen_settings='english', add_junk_states=True):
         self.func_counter = 0
@@ -389,7 +388,7 @@ class StateMachineTransformer(ast.NodeTransformer):
 
     def visit_ClassDef(self, node):
         """Process class - obfuscate all methods inside"""
-        print(f"[STATE_MACHINE] Processing class: {node.name}")
+
         new_body = []
         for item in node.body:
             if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -417,7 +416,7 @@ class StateMachineTransformer(ast.NodeTransformer):
 
         # NEVER transform async generators - they must keep yield
         if is_generator:
-            print(f"[STATE_MACHINE] Skipping async generator function: {node.name}")
+
             self.state_var = old_state
             self.block_to_state_map = old_block_to_state_map
             self.state_to_block_map = old_state_to_block_map
@@ -436,13 +435,11 @@ class StateMachineTransformer(ast.NodeTransformer):
         is_expanded_loop = loop_stmt is not None
 
         if is_expanded_loop:
-            print(f"[STATE_MACHINE] Async function '{node.name}': expanding single loop body ({len(loop_stmt.body)} statements) into {len(expanded_blocks)} blocks")
+
             blocks = expanded_blocks
 
-        print(f"[STATE_MACHINE] Async function '{node.name}': {len(node.body)} statements, split into {len(blocks)} blocks")
-
         if len(blocks) <= 1 and not is_generator:
-            print(f"[STATE_MACHINE] Skipping async function '{node.name}': only {len(blocks)} block(s) and not a generator")
+
             self.state_var = old_state
             return self.generic_visit(node)
 
@@ -461,7 +458,6 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.block_to_state_map = dict(zip(range(len(blocks)), state_values))
         self.state_to_block_map = dict(zip(state_values, range(len(blocks))))
 
-        print(f"[STATE_MACHINE] Async function '{node.name}': state values: {state_values}")
         while True:
             final_rand_state = random.randint(1000, 999999)
             if final_rand_state not in unique_states:
@@ -522,9 +518,6 @@ class StateMachineTransformer(ast.NodeTransformer):
         if self.add_junk_states:
             junk_cases = self._generate_junk_states(num_junk_states=random.randint(2, 5))
             cases.extend(junk_cases)
-            print(f"[STATE_MACHINE] Async function '{node.name}': added {len(junk_cases)} junk states")
-
-        print(f"[STATE_MACHINE] Async function '{node.name}': IF statements order shuffled: {block_indices}")
 
         # Use regular while loop - await expressions inside will work fine
         if is_expanded_loop:
@@ -564,20 +557,20 @@ class StateMachineTransformer(ast.NodeTransformer):
         # Check for @skip_obf decorator
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Name) and decorator.id == 'skip_obf':
-                print(f"[STATE_MACHINE] Skipping function (has @skip_obf): {node.name}")
+
                 return self.generic_visit(node)
             elif isinstance(decorator, ast.Attribute) and decorator.attr == 'skip_obf':
-                print(f"[STATE_MACHINE] Skipping function (has @skip_obf): {node.name}")
+
                 return self.generic_visit(node)
         
         # Skip functions that contain async - they're handled by visit_AsyncFunctionDef
         if self._contains_async(node):
-            print(f"[STATE_MACHINE] Skipping function (contains async): {node.name}")
+
             return self.generic_visit(node)
 
         # Minimum size check
         if len(node.body) < 1:
-            print(f"[STATE_MACHINE] Skipping function (empty body): {node.name}")
+
             return self.generic_visit(node)
 
         self.func_counter += 1
@@ -602,13 +595,11 @@ class StateMachineTransformer(ast.NodeTransformer):
         is_expanded_loop = loop_stmt is not None
 
         if is_expanded_loop:
-            print(f"[STATE_MACHINE] Function '{node.name}': expanding single loop body ({len(loop_stmt.body)} statements) into {len(expanded_blocks)} blocks")
+
             blocks = expanded_blocks
 
-        print(f"[STATE_MACHINE] Function '{node.name}': {len(node.body)} statements, split into {len(blocks)} blocks")
-
         if len(blocks) <= 1 and not is_generator:
-            print(f"[STATE_MACHINE] Skipping function '{node.name}': only {len(blocks)} block(s) and not a generator")
+
             self.state_var = old_state
             return self.generic_visit(node)
 
@@ -627,7 +618,6 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.block_to_state_map = dict(zip(range(len(blocks)), state_values))
         self.state_to_block_map = dict(zip(state_values, range(len(blocks))))
 
-        print(f"[STATE_MACHINE] Function '{node.name}': state values: {state_values}")
         while True:
             final_rand_state = random.randint(1000, 999999)
             if final_rand_state not in unique_states:
@@ -688,9 +678,6 @@ class StateMachineTransformer(ast.NodeTransformer):
         if self.add_junk_states:
             junk_cases = self._generate_junk_states(num_junk_states=random.randint(2, 5))
             cases.extend(junk_cases)
-            print(f"[STATE_MACHINE] Function '{node.name}': added {len(junk_cases)} junk states")
-
-        print(f"[STATE_MACHINE] Function '{node.name}': IF statements order shuffled: {block_indices}")
 
         # while state != FINAL (or while True for expanded loop)
         if is_expanded_loop:
@@ -764,7 +751,7 @@ class StateMachineTransformer(ast.NodeTransformer):
             stmt = blocks[0][0]
             if isinstance(stmt, (ast.While, ast.For)) and len(stmt.body) > 1:
                 expanded_blocks = self._split_into_blocks(stmt.body)
-                print(f"[STATE_MACHINE] Expanded loop body into {len(expanded_blocks)} blocks")
+
                 return expanded_blocks, stmt
         return blocks, None
 
@@ -948,15 +935,15 @@ class StateMachineTransformer(ast.NodeTransformer):
     def apply_transformation(self, code):
         """Apply state machine transformation to Python code."""
         try:
-            print(f"[STATE_MACHINE] Starting transformation...")
+
             tree = ast.parse(code)
             transformed_tree = self.visit(tree)
             ast.fix_missing_locations(transformed_tree)
             result = ast.unparse(transformed_tree)
-            print(f"[STATE_MACHINE] Transformation complete. Code changed: {result != code}")
+
             return result
         except Exception as e:
-            print(f"State machine transformation failed: {e}")
+
             import traceback
             traceback.print_exc()
             return code

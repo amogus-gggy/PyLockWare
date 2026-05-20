@@ -6,7 +6,6 @@ import ast
 import random
 from pylockware.core.name_generator import generate_random_name
 
-
 class TypeAnnotationObfuscator(ast.NodeTransformer):
     """
     Obfuscates type annotations by:
@@ -163,7 +162,7 @@ class TypeAnnotationObfuscator(ast.NodeTransformer):
             Transformed code with obfuscated type annotations
         """
         try:
-            print(f"[TYPE_OBF] Starting transformation...")
+
             tree = ast.parse(code)
             transformed_tree = self.visit(tree)
             ast.fix_missing_locations(transformed_tree)
@@ -172,10 +171,9 @@ class TypeAnnotationObfuscator(ast.NodeTransformer):
             # Add typing imports if needed
             result = self._add_typing_imports(result)
 
-            print(f"[TYPE_OBF] Transformation complete. Code changed: {result != code}")
             return result
         except Exception as e:
-            print(f"Type annotation obfuscation failed: {e}")
+
             import traceback
             traceback.print_exc()
             return code

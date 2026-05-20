@@ -5,7 +5,6 @@ import random
 import string
 from pylockware.core.name_generator import generate_random_name
 
-
 class StringProtectionTransformer(ast.NodeTransformer):
     """AST transformer to protect string literals using base64 and zlib."""
 
@@ -322,10 +321,8 @@ def {transformer.format_func_name}(template, *args):
             return protected_code
 
         except Exception as e:
-            print(f"String protection failed: {e}")
 
             return code
-
 
 def protect_strings_in_file(file_path):
     """Protect strings in a Python file."""
@@ -354,7 +351,6 @@ def protect_strings_in_file(file_path):
         print(f"Error protecting strings in {file_path}: {e}")
 
         return False
-
 
 def protect_strings_in_directory(directory):
     """Protect strings in all Python files in a directory."""

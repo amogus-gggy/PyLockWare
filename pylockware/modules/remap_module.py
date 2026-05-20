@@ -316,13 +316,6 @@ class RemapModule(ModuleBase):
 
         try:
             tree = ast.parse(content)
-            
-            # Debug: check if 'main' is in remap_map
-            if 'main' in self.remap_map:
-                print(f"[REMAP DEBUG] WARNING: 'main' is in remap_map with value '{self.remap_map['main']}'")
-            else:
-                print(f"[REMAP DEBUG] 'main' is NOT in remap_map (correct)")
-            
             transformer = GlobalRenamer(self.remap_map)
             # First pass: collect Pydantic classes to protect their fields
             transformer._collect_pydantic_classes(tree)
@@ -337,4 +330,4 @@ class RemapModule(ModuleBase):
                 f.write(new_content)
 
         except Exception as e:
-            print(f"Error remapping {file_path}: {e}")
+            pass

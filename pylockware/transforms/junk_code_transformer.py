@@ -6,7 +6,6 @@ import ast
 import random
 from pylockware.core.name_generator import generate_random_name
 
-
 class JunkCodeTransformer(ast.NodeTransformer):
     """
     Transforms code by adding fake if/elif branches with opaque predicates.
@@ -584,17 +583,15 @@ class JunkCodeTransformer(ast.NodeTransformer):
         # Check for @skip_obf decorator
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Name) and decorator.id == 'skip_obf':
-                print(f"[JUNK_CODE] Skipping function (has @skip_obf): {node.name}")
+
                 return self.generic_visit(node)
             elif isinstance(decorator, ast.Attribute) and decorator.attr == 'skip_obf':
-                print(f"[JUNK_CODE] Skipping function (has @skip_obf): {node.name}")
+
                 return self.generic_visit(node)
         
         # Randomly decide whether to add junk to this function
         if random.random() > self.junk_density:
             return self.generic_visit(node)
-
-        print(f"[JUNK_CODE] Adding junk code to function: {node.name}")
 
         new_body = []
 
@@ -633,8 +630,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
         if random.random() > self.junk_density:
             return self.generic_visit(node)
 
-        print(f"[JUNK_CODE] Adding junk code to async function: {node.name}")
-
         new_body = []
 
         for stmt in node.body:
@@ -668,7 +663,7 @@ class JunkCodeTransformer(ast.NodeTransformer):
     
     def visit_ClassDef(self, node):
         """Process class definitions - apply junk code to methods."""
-        print(f"[JUNK_CODE] Processing class: {node.name}")
+
         new_body = []
         for item in node.body:
             if isinstance(item, ast.FunctionDef):
@@ -691,13 +686,13 @@ class JunkCodeTransformer(ast.NodeTransformer):
             Transformed code with junk if/elif branches
         """
         try:
-            print(f"[JUNK_CODE] Starting transformation...")
+
             tree = ast.parse(code)
             transformed_tree = self.visit(tree)
             ast.fix_missing_locations(transformed_tree)
             result = ast.unparse(transformed_tree)
-            print(f"[JUNK_CODE] Transformation complete. Code changed: {result != code}")
+
             return result
         except Exception as e:
-            print(f"Junk code transformation failed: {e}")
+
             return code
