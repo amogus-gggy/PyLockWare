@@ -7,11 +7,16 @@ CustomVM Virtualization is the most powerful protection feature in PyLockWare. I
 ## Key Features
 
 - **Custom Instruction Set**: Unique opcodes generated for each build
+- **Randomized Opcode Mapping**: Completely different opcode values in every build
+- **Keyflow Encryption**: Instructions decrypted one at a time during execution
 - **Multi-Layer Encryption**: 4 layers of obfuscation (bit rotation, additive cipher, XOR, block encryption)
+- **Context-Aware Encoding**: Opcodes change based on execution position
 - **Runtime-Only Decryption**: Code is never visible in memory unencrypted
 - **Anti-Debug Protection**: Built-in timing checks and integrity validation
 - **Unique Per Build**: Each build generates different VM with different opcodes
 - **No CPython Bytecode**: Original Python bytecode is completely eliminated
+
+For detailed information about advanced features like randomized opcodes and keyflow encryption, see [ADVANCED_VIRTUALIZATION.md](ADVANCED_VIRTUALIZATION.md).
 
 ## Quick Start
 

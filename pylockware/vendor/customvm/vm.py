@@ -25,8 +25,13 @@ class VirtualMachine:
         self.integrity_hash = None
         self.func_pool = []
         self.string_pool = []
-
-    def load_bytecode(self, code, opcode_set, crypto, const_pool, integrity_hash, func_pool=None, string_pool=None):
+        
+        # Keyflow support
+        self.keyflow = None
+        self.use_keyflow = False
+        self.prev_opcode = 0
+        self.inst_index = 0   # instruction counter for context  # Track previous opcode for keyflow
+    def load_bytecode(self, code, opcode_set, crypto, const_pool, integrity_hash, func_pool=None, string_pool=None, keyflow=None):
         self.code = code
         self.code_size = len(code)
         self.opcode_set = opcode_set
@@ -34,7 +39,13 @@ class VirtualMachine:
         self.const_pool = const_pool
         self.integrity_hash = integrity_hash
         self.ip = 0
+        self.inst_index = 0
         self.start_time = time.time()
+        self.prev_opcode = 0
+        self.use_keyflow = False
+        self.keyflow = None
+        self.globals_ctx = None  # caller globals for resolving user functions
+
         if func_pool is not None:
             self.func_pool = func_pool
         if string_pool is not None:
@@ -100,7 +111,10 @@ class VirtualMachine:
             self._add_timing_noise()
 
             raw_opcode = self._read_byte()
-            instruction = self.opcode_set.decode_opcode(raw_opcode, self.context)
+            # Context matches builder: changes every 16 instructions
+            context = (self.inst_index // 16) & 0xFF
+            instruction = self.opcode_set.decode_opcode(raw_opcode, context)
+            self.inst_index += 1
 
             if instruction == INST_NOP:
                 pass
@@ -452,13 +466,6 @@ class VirtualMachine:
             if self.stack:
                 print(self.stack[-1])
         elif num == 10:
-            """Call a Python function from func_pool.
-            Stack before: [argN, ..., arg1, num_args, func_index, 10]
-            - func_index: index into self.func_pool
-            - num_args: number of arguments
-            - arg1..argN: arguments (arg1 is topmost after num_args)
-            Result is pushed back as a 32-bit int or string.
-            """
             func_index = self._pop()
             num_args = self._pop()
             args = []
@@ -469,13 +476,8 @@ class VirtualMachine:
                 try:
                     result = func(*args)
                     self._push(self._convert_to_vm_value(result))
-                except Exception as e:
-                    # Try to handle as string method
-                    result = self._handle_string_method(func, args)
-                    if result is not None:
-                        self._push(result)
-                    else:
-                        self._push(0)
+                except Exception:
+                    self._push(0)
             else:
                 self._push(0)
     

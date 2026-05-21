@@ -145,9 +145,7 @@ class PyObfuscator:
 
 
 
-        if self.virtualization:
-            virtualization_config = {}
-            self.module_manager.add_module(VirtualizationModule(virtualization_config))
+
 
         if self.remap:
             remap_config = {
@@ -155,6 +153,10 @@ class PyObfuscator:
                 'name_gen': self.name_gen
             }
             self.module_manager.add_module(RemapModule(remap_config))
+
+        if self.virtualization:
+            virtualization_config = {}
+            self.module_manager.add_module(VirtualizationModule(virtualization_config))
 
         if self.call_obf:
             call_obf_config = {'name_gen': self.name_gen}
@@ -196,6 +198,8 @@ class PyObfuscator:
                 'add_junk_states': True
             }
             self.module_manager.add_module(StateMachineModule(state_machine_config))
+
+
 
         if self.num_obf:
             num_obf_config = {'name_gen': self.name_gen}

@@ -85,6 +85,12 @@ class PythonCompiler:
         # Compile main body
         self._visit_body(body_stmts)
 
+        # If the last statement is not a Return, push 0 as default return value
+        # so the VM always has something on the stack when it halts
+        has_return = any(isinstance(s, ast.Return) for s in ast.walk(ast.Module(body=body_stmts, type_ignores=[])))
+        if not has_return:
+            self.builder.push_imm(0)
+
         self.builder.halt()
 
     def _visit_Assign(self, node):
@@ -95,6 +101,16 @@ class PythonCompiler:
             raise NotImplementedError(
                 f"Assignment target type not supported: {type(target).__name__}"
             )
+        
+        # Check if this is a __POP_STACK__ assignment
+        if isinstance(node.value, ast.Name) and node.value.id == '__POP_STACK__':
+            # Pop from stack directly into register
+            # Don't evaluate the right side, just pop
+            reg = self._get_or_create_var(target.id)
+            self.builder.pop_reg(reg)
+            return
+        
+        # Normal assignment - evaluate right side
         self._visit(node.value)
 
         # Track string variables for + → str_concat detection
@@ -915,8 +931,20 @@ class PythonCompiler:
 
     def _visit_Name(self, node):
         if isinstance(node.ctx, ast.Load):
-            reg = self._get_var(node.id)
-            self.builder.push_reg(reg)
+            # Check for special __POP_STACK__ marker
+            if node.id == '__POP_STACK__':
+                # This is handled in _visit_Assign, not here
+                raise ValueError("__POP_STACK__ should only appear on right side of assignment")
+            
+            # Try to get variable, if not found it might be a function name
+            if node.id in self.variables:
+                reg = self.variables[node.id]
+                self.builder.push_reg(reg)
+            else:
+                # Variable not found - this might be an error, but let's be lenient
+                # It could be a function name or external reference
+                # For now, push 0 as placeholder
+                raise NameError(f"Undefined variable: '{node.id}'")
 
     def _visit_Constant(self, node):
         if isinstance(node.value, (int, bool)):
@@ -930,6 +958,48 @@ class PythonCompiler:
             raise NotImplementedError(
                 f"Constant type not supported: {type(node.value).__name__}"
             )
+    
+    def _visit_JoinedStr(self, node):
+        """Handle f-strings (formatted string literals).
+        
+        f"Hello {name}" becomes: "Hello " + str(name)
+        """
+        # Start with empty string
+        if not node.values:
+            idx = self.builder.add_string("")
+            self.builder.str_load(idx)
+            return
+        
+        # Process first value
+        first = node.values[0]
+        if isinstance(first, ast.Constant):
+            idx = self.builder.add_string(str(first.value))
+            self.builder.str_load(idx)
+        elif isinstance(first, ast.FormattedValue):
+            self._visit(first.value)
+            # Convert to string if needed (push value, then we'll concatenate)
+        else:
+            raise NotImplementedError(f"JoinedStr value type not supported: {type(first).__name__}")
+        
+        # Concatenate remaining values
+        for value in node.values[1:]:
+            if isinstance(value, ast.Constant):
+                idx = self.builder.add_string(str(value.value))
+                self.builder.str_load(idx)
+            elif isinstance(value, ast.FormattedValue):
+                self._visit(value.value)
+                # Value is now on stack
+            else:
+                raise NotImplementedError(f"JoinedStr value type not supported: {type(value).__name__}")
+            
+            # Concatenate with previous result
+            self.builder.str_concat()
+    
+    def _visit_FormattedValue(self, node):
+        """Handle formatted value inside f-string."""
+        # Just evaluate the expression
+        self._visit(node.value)
+        # Format spec is ignored for now (e.g., {x:.2f} becomes just {x})
 
     # ---- Variable / Function Helpers ----
 
@@ -943,16 +1013,31 @@ class PythonCompiler:
         self.func_to_idx[name] = idx
 
     def _register_external_function(self, name):
+        """Register an external function (builtin or user-defined).
+        
+        We don't check if the function actually exists - that's a runtime concern.
+        If it doesn't exist at runtime, the VM will handle the error.
+        """
         if name in self.func_to_idx:
             return
         if name in self.user_funcs:
             return
+        
+        # Try to get from builtins
         func = getattr(builtins, name, None)
-        if func is None or not callable(func):
-            raise NameError(f"Function '{name}' is not defined and is not a builtin")
-        idx = len(self.builder.func_pool)
-        self.builder.func_pool.append((name, 'builtin', None))
-        self.func_to_idx[name] = idx
+        
+        if func is not None and callable(func):
+            # It's a builtin - register it
+            idx = len(self.builder.func_pool)
+            self.builder.func_pool.append((name, 'builtin', None))
+            self.func_to_idx[name] = idx
+        else:
+            # Not a builtin - assume it's a user function that will be available at runtime
+            # Register it as an external reference
+            idx = len(self.builder.func_pool)
+            # Mark as 'builtin' but it will be resolved at runtime
+            self.builder.func_pool.append((name, 'builtin', None))
+            self.func_to_idx[name] = idx
 
     def _get_var(self, name):
         if name in self.variables:

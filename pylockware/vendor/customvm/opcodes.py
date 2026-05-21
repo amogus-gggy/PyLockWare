@@ -1,33 +1,63 @@
 import random
 import time
+import hashlib
 
 class OpcodeSet:
+    """Randomized opcode mapping with context-aware transformations.
+    
+    Each build generates a unique opcode mapping, making reverse engineering
+    significantly harder. The mapping is deterministic based on seed but
+    completely different for each build.
+    """
+    
     def __init__(self, seed=None):
         self._seed = seed or int(time.time() * 1000000) & 0xFFFFFFFF
         self._rng = random.Random(self._seed)
-        self._base_opcodes = self._generate_base_opcodes()
-        self._context_map = {}
         
-    def _generate_base_opcodes(self):
+        # Generate completely random base opcode mapping
+        self._base_opcodes = self._generate_random_opcodes()
+        
+        # Generate random context transformation parameters
+        self._context_multiplier = self._rng.randint(1, 255) | 1  # Must be odd for bijection
+        self._context_offset = self._rng.randint(0, 255)
+        
+        # Cache for decoded opcodes
+        self._context_map = {}
+        self._decode_cache = {}
+        
+    def _generate_random_opcodes(self):
+        """Generate a completely random permutation of 0-255."""
         opcodes = list(range(256))
         self._rng.shuffle(opcodes)
         return opcodes
     
     def get_opcode(self, instruction, context=0):
+        """Encode an instruction with context-aware transformation."""
         ctx_key = (instruction, context & 0xFF)
         if ctx_key not in self._context_map:
-            # Simple rotation by context preserves bijection:
-            #   base[] is a permutation → adding a constant keeps it a permutation.
-            # This guarantees NO collisions, unlike the old offset approach.
-            rotated = (self._base_opcodes[instruction] + context * 13) & 0xFF
-            self._context_map[ctx_key] = rotated
+            # Apply context transformation: (base + context * multiplier + offset) mod 256
+            # This creates a unique mapping for each context while preserving bijection
+            base = self._base_opcodes[instruction]
+            transformed = (base + context * self._context_multiplier + self._context_offset) & 0xFF
+            self._context_map[ctx_key] = transformed
         return self._context_map[ctx_key]
     
     def decode_opcode(self, byte_val, context=0):
+        """Decode an opcode byte back to instruction."""
+        cache_key = (byte_val, context & 0xFF)
+        if cache_key in self._decode_cache:
+            return self._decode_cache[cache_key]
+        
+        # Reverse lookup
         for inst in range(256):
             if self.get_opcode(inst, context) == byte_val:
+                self._decode_cache[cache_key] = inst
                 return inst
         return 0xFF
+    
+    def get_seed(self):
+        """Return the seed used for this opcode set."""
+        return self._seed
 
 INST_NOP = 0x00
 INST_PUSH_IMM = 0x01

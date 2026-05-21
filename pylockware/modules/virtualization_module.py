@@ -171,52 +171,46 @@ from customvm import BytecodeLoader, VirtualMachine
 
 
 def vmentry(bytecode_file: str, *args, **kwargs):
-    """
-    VM entry point for virtualized functions.
-    
-    Args:
-        bytecode_file: Name of the .cvm file (without path)
-        *args: Arguments to pass to the virtualized function
-        **kwargs: Keyword arguments to pass to the virtualized function
-        
-    Returns:
-        Result from the virtualized function
-    """
-    # Locate bytecode file
+    """VM entry point for virtualized functions."""
     assets_dir = Path(__file__).parent
     cvm_path = assets_dir / bytecode_file
-    
+
     if not cvm_path.exists():
         raise FileNotFoundError(f"VM bytecode not found: {{bytecode_file}}")
-    
-    # Load and execute
+
     try:
+        import sys as _sys
+        # Capture caller's globals so VM can resolve user-defined functions
+        caller_globals = _sys._getframe(1).f_globals
+
         loader = BytecodeLoader()
-        # Loader returns 7 values: code, opcode_set, crypto, const_pool, integrity_hash, func_pool, string_pool
         result = loader.load(str(cvm_path))
-        
-        if len(result) == 7:
-            code, opcode_set, crypto, const_pool, integrity_hash, func_pool, string_pool = result
+
+        if len(result) == 8:
+            code, opcode_set, crypto, const_pool, integrity_hash, func_pool, string_pool, keyflow = result
         else:
-            # Fallback for older format
-            code, opcode_set, crypto, const_pool, integrity_hash = result[:5]
-            func_pool = []
-            string_pool = []
-        
-        # Inject arguments into const_pool
-        # The compiled code expects arguments at the beginning of const_pool
-        if args:
-            # Prepend arguments to const_pool (keeping their original types)
-            const_pool = list(args) + list(const_pool)
-        
+            code, opcode_set, crypto, const_pool, integrity_hash, func_pool, string_pool = result[:7]
+            keyflow = None
+
+        # Patch lazy resolvers with caller globals
+        resolved_pool = []
+        for func in func_pool:
+            name = getattr(func, '__vm_func_name__', None)
+            if name is not None and name in caller_globals:
+                resolved_pool.append(caller_globals[name])
+            else:
+                resolved_pool.append(func)
+
         vm = VirtualMachine()
-        vm.load_bytecode(code, opcode_set, crypto, const_pool, integrity_hash, func_pool, string_pool)
-        
-        # Execute the VM
-        result = vm.execute()
-        
-        return result
-        
+        vm.load_bytecode(code, opcode_set, crypto, const_pool, integrity_hash,
+                         resolved_pool, string_pool, keyflow)
+
+        # Push arguments onto the stack before execution
+        for arg in args:
+            vm._push(arg)
+
+        return vm.execute()
+
     except Exception as e:
         raise RuntimeError(f"VM execution failed: {{e}}")
 
@@ -293,34 +287,29 @@ class VirtualizationTransformer(ast.NodeTransformer):
             # Extract function parameters
             param_names = [arg.arg for arg in func_node.args.args]
             
-            # Create inline version of function body
-            # For functions with parameters, we'll load them from const_pool
+            # Create wrapper source
+            # Parameters are pushed onto the stack by vmentry in order: arg0, arg1, arg2...
+            # Stack grows up, so last pushed is on top
+            # We need to pop them in REVERSE order to get them in correct variables
+            wrapper_source = ""
             
-            if len(param_names) == 1:
-                # Single parameter function
-                # Load parameter from const_pool[0] (injected by vmentry)
-                param_name = param_names[0]
-                
-                # Create wrapper that loads argument from const_pool index 0
-                wrapper_source = f"""# Load parameter from const_pool
-{param_name} = 0  # Placeholder constant, will be replaced by vmentry
-# Function body:
-"""
-                for stmt in func_node.body:
-                    wrapper_source += ast.unparse(stmt) + "\n"
-                
-            elif len(param_names) == 0:
-                # No parameters - just compile body
-                wrapper_source = ""
-                for stmt in func_node.body:
-                    wrapper_source += ast.unparse(stmt) + "\n"
-            else:
-                # Multiple parameters - load from const_pool[0], const_pool[1], etc.
-                wrapper_source = "# Load parameters from const_pool\n"
-                for i, param in enumerate(param_names):
-                    wrapper_source += f'{param} = {i}  # Placeholder, will be replaced by vmentry\n'
-                for stmt in func_node.body:
-                    wrapper_source += ast.unparse(stmt) + "\n"
+            # Pop parameters from stack in reverse order
+            # If we have params [x, y], vmentry pushes x then y
+            # Stack: [... x y] (y on top)
+            # We pop y first, then x
+            for param in reversed(param_names):
+                wrapper_source += f"{param} = __POP_STACK__\n"
+            
+            # Add function body - skip docstring (first Expr(Constant(str)))
+            body_stmts = func_node.body
+            if (body_stmts and
+                    isinstance(body_stmts[0], ast.Expr) and
+                    isinstance(body_stmts[0].value, ast.Constant) and
+                    isinstance(body_stmts[0].value.value, str)):
+                body_stmts = body_stmts[1:]  # skip docstring
+            
+            for stmt in body_stmts:
+                wrapper_source += ast.unparse(stmt) + "\n"
             
             # Create VM builder and compile
             builder = VMBuilder()
@@ -329,7 +318,7 @@ class VirtualizationTransformer(ast.NodeTransformer):
             try:
                 # Try to compile the function body
                 compiler.compile(wrapper_source)
-                builder.build(str(cvm_path))
+                builder.build(str(cvm_path), use_keyflow=False)
                 
                 self.virtualized_functions[func_node.name] = cvm_filename
                 print(f"[Virtualization] Compiled {func_node.name} -> {cvm_filename}")
@@ -337,11 +326,26 @@ class VirtualizationTransformer(ast.NodeTransformer):
                     print(f"[Virtualization]   Parameters: {param_names}")
                 return cvm_filename
                 
+            except NotImplementedError as e:
+                # Function uses unsupported Python constructs - skip silently
+                return None
+                
+            except (ValueError, NameError) as e:
+                # Function references undefined functions or variables
+                error_msg = str(e)
+                if "not defined" in error_msg or "not a builtin" in error_msg or "Undefined variable" in error_msg:
+                    # This is expected - function calls other user functions or has issues
+                    # Print for debugging
+                    print(f"[Virtualization] Debug: {func_node.name} - {error_msg}")
+                    return None
+                else:
+                    # Unexpected error - log it
+                    print(f"[Virtualization] Warning: Could not virtualize {func_node.name}: {e}")
+                    return None
+                
             except Exception as e:
-                print(f"[Virtualization] Failed to compile {func_node.name}: {e}")
-                print(f"[Virtualization] Error: {str(e)}")
-                print(f"[Virtualization] CustomVM supports: arithmetic, strings, control flow, string methods")
-                print(f"[Virtualization] Function will not be virtualized")
+                # Unexpected error - log it but don't spam
+                print(f"[Virtualization] Warning: Could not virtualize {func_node.name}: {type(e).__name__}: {e}")
                 return None
                 
         except Exception as e:
