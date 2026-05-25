@@ -25,7 +25,6 @@ from pylockware.modules.junk_code_module import JunkCodeModule
 from pylockware.modules.decorator_obf_module import DecoratorObfModule
 from pylockware.modules.type_annotation_obf_module import TypeAnnotationObfModule
 from pylockware.modules.call_obf_module import CallObfModule
-from pylockware.modules.virtualization_module import VirtualizationModule
 from pylockware.modules.remove_annotations_module import RemoveAnnotationsModule
 
 
@@ -46,8 +45,7 @@ class PyObfuscator:
                  nuitka_output_name: str = None, nuitka_disable_console: bool = True, nuitka_icon: str = None,
                  nuitka_admin: bool = False, nuitka_plugins: List[str] = None, nuitka_extra_imports: List[str] = None,
                  nuitka_options: List[str] = None, disable_traceback: bool = False,
-                 decorator_obf: bool = False, type_annotation_obf: bool = False, call_obf: bool = False,
-                 virtualization: bool = False):
+                 decorator_obf: bool = False, type_annotation_obf: bool = False, call_obf: bool = False):
         self.project_path = Path(project_path)
         self.entry_point = Path(entry_point)
         self.entry_function = entry_function
@@ -68,7 +66,6 @@ class PyObfuscator:
         self.decorator_obf = decorator_obf  # Enable decorator obfuscation
         self.type_annotation_obf = type_annotation_obf  # Enable type annotation obfuscation
         self.call_obf = call_obf  # Enable call obfuscation using getattr pattern
-        self.virtualization = virtualization  # Enable CustomVM virtualization
 
         # Nuitka options
         self.enable_nuitka = enable_nuitka
@@ -153,10 +150,6 @@ class PyObfuscator:
                 'name_gen': self.name_gen
             }
             self.module_manager.add_module(RemapModule(remap_config))
-
-        if self.virtualization:
-            virtualization_config = {}
-            self.module_manager.add_module(VirtualizationModule(virtualization_config))
 
         if self.call_obf:
             call_obf_config = {'name_gen': self.name_gen}

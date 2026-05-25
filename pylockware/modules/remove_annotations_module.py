@@ -16,7 +16,7 @@ class RemoveAnnotationsTransformer(ast.NodeTransformer):
     и импорты pylockware
     """
     
-    PYLOCKWARE_DECORATORS = {'external', 'skip_obf', 'preserve_name', 'virtualize'}
+    PYLOCKWARE_DECORATORS = {'external', 'skip_obf', 'preserve_name'}
     
     def __init__(self):
         self.removed_count = 0
@@ -202,7 +202,7 @@ class RemoveAnnotationsModule(ModuleBase):
         source = re.sub(r'^from\s+pylockware\s+import\s+.*$', '', source, flags=re.MULTILINE)
         source = re.sub(r'^import\s+pylockware.*$', '', source, flags=re.MULTILINE)
         
-        # Удаляем декораторы @external, @skip_obf, @preserve_name, @virtualize
+        # Удаляем декораторы @external, @skip_obf, @preserve_name
         for decorator in self.PYLOCKWARE_DECORATORS:
             source = re.sub(rf'^\s*@{decorator}\s*$', '', source, flags=re.MULTILINE)
         

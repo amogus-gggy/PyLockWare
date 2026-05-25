@@ -31,7 +31,6 @@ class BuildConfig:
     decorator_obf: bool = True
     call_obf: bool = False
     disable_traceback: bool = True
-    virtualization: bool = True  # CustomVM virtualization
     
     # Параметры обфускации
     junk_density: float = 0.5
@@ -176,7 +175,6 @@ def _save_pretty_toml(data: dict, path: Path, config: BuildConfig) -> None:
     lines.append(f"decorator_obf = {str(config.decorator_obf).lower()}")
     lines.append(f"call_obf = {str(config.call_obf).lower()}")
     lines.append(f"disable_traceback = {str(config.disable_traceback).lower()}")
-    lines.append(f"virtualization = {str(config.virtualization).lower()}")
     lines.append("")
 
     

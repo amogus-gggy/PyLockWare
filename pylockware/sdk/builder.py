@@ -130,7 +130,6 @@ class Builder:
             disable_traceback=self.config.disable_traceback,
             decorator_obf=self.config.decorator_obf,
             call_obf=self.config.call_obf,
-            virtualization=self.config.virtualization,
             enable_nuitka=self.config.enable_nuitka,
             nuitka_onefile=self.config.nuitka_onefile,
             nuitka_standalone=self.config.nuitka_standalone,
