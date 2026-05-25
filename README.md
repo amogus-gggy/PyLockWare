@@ -5,6 +5,10 @@
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
+## Changelog
+- Removed virtualization, because it was too hard to implement fully
+- Added crypter module
+
 
 ## 🚀 Features
 
@@ -12,6 +16,7 @@
 - `@external` - Preserve function/class names (for public APIs)
 - `@skip_obf` - Skip all obfuscation steps (for debugging)
 - `@preserve_name` - Alias for `@external`
+- `@crypt` - encrypt function body(only works with crypt=true in config. when crypt inst turned on, function will not be obfuscated at all)
 - **Annotations are automatically removed after obfuscation**
 
 ### Obfuscation Techniques
