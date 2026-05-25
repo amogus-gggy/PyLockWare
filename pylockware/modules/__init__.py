@@ -8,6 +8,7 @@ from .number_obf_module import NumberObfModule
 from .anti_debug_module import AntiDebugModule
 from .import_obf_module import ImportObfuscateModule
 from .state_machine_module import StateMachineModule
+from .crypt_module import CryptModule
 
 __all__ = [
     'RemapModule',
@@ -15,5 +16,6 @@ __all__ = [
     'NumberObfModule',
     'AntiDebugModule',
     'ImportObfuscateModule',
-    'StateMachineModule'
+    'StateMachineModule',
+    'CryptModule',
 ]

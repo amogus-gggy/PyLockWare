@@ -42,7 +42,7 @@ from .modules import (
 )
 
 # SDK components
-from .decorators import external, skip_obf, preserve_name
+from .decorators import external, skip_obf, preserve_name, crypt, is_crypt
 from .sdk import Builder, BuildConfig, load_config, save_config, init_config
 
 __version__ = "3.0.0"
@@ -70,4 +70,6 @@ __all__ = [
     'external',
     'skip_obf',
     'preserve_name',
+    'crypt',
+    'is_crypt',
 ]

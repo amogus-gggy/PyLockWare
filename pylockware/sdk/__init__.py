@@ -5,7 +5,7 @@ PyLockWare SDK
 
 from pylockware.sdk.builder import Builder, BuildConfig
 from pylockware.sdk.config import load_config, save_config, init_config
-from pylockware.decorators import external, skip_obf, preserve_name
+from pylockware.decorators import external, skip_obf, preserve_name, crypt, is_crypt
 
 __all__ = [
     'Builder',
@@ -16,4 +16,6 @@ __all__ = [
     'external',
     'skip_obf',
     'preserve_name',
+    'crypt',
+    'is_crypt',
 ]

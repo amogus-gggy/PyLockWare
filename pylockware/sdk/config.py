@@ -30,6 +30,7 @@ class BuildConfig:
     junk_code: bool = True
     decorator_obf: bool = True
     call_obf: bool = False
+    crypt: bool = False
     disable_traceback: bool = True
     
     # Параметры обфускации
@@ -174,6 +175,7 @@ def _save_pretty_toml(data: dict, path: Path, config: BuildConfig) -> None:
     lines.append(f"junk_code = {str(config.junk_code).lower()}")
     lines.append(f"decorator_obf = {str(config.decorator_obf).lower()}")
     lines.append(f"call_obf = {str(config.call_obf).lower()}")
+    lines.append(f"crypt = {str(config.crypt).lower()}")
     lines.append(f"disable_traceback = {str(config.disable_traceback).lower()}")
     lines.append("")
 
@@ -303,75 +305,95 @@ def _create_scaffold(project_dir: Path, config: BuildConfig) -> None:
     print("\nNext steps:")
     print(f"  1. Edit {config.entry_point} with your code")
     print("  2. Add @external decorator to public APIs")
-    print("  3. Run: pylockware build")
-    print(f"  4. Your protected code will be in {config.output_dir}/")
+    print("  3. Add @crypt decorator to sensitive functions")
+    print("  4. Run: pylockware build")
+    print(f"  5. Your protected code will be in {config.output_dir}/")
 
 
 def _get_main_template(entry_function: str) -> str:
     """Returns main.py template"""
-    return f'''"""
-PyLockWare Protected Application
-"""
-
-from pylockware import external, skip_obf
-
-
-# === PUBLIC API (names preserved) ===
-
-@external
-def greet(name: str) -> str:
-    """Public — visible from outside"""
-    return _format_greeting(name)
-
-
-@external
-def add(a: int, b: int) -> int:
-    """Public — visible from outside"""
-    return _calculate(a, b)
-
-
-# === INTERNAL (will be obfuscated) ===
-
-def _format_greeting(name: str) -> str:
-    """Internal — will be obfuscated"""
-    return f"Hello, {{name.title()}}!"
-
-
-def _calculate(x: int, y: int) -> int:
-    """Internal — will be obfuscated"""
-    return (x * 2 + y * 3) % 1000
-
-
-# === DEBUG (remove @skip_obf in production!) ===
-
-@skip_obf
-def debug_status():
-    """DEBUG: not obfuscated! Remove @skip_obf before release."""
-    print("[DEBUG] App running — internal logic exposed for debugging")
-
-
-# === ENTRY POINT ===
-
-@external
-def {entry_function}():
-    """Main entry point"""
-    print("=" * 40)
-    print("PyLockWare Protected App")
-    print("=" * 40)
-
-    # Public API demo
-    print(greet("world"))
-    print(f"Result: {{add(10, 20)}}")
-
-    # Debug (remove in production)
-    debug_status()
-
-    print("=" * 40)
-
-
-if __name__ == "__main__":
-    {entry_function}()
-'''
+    lines = [
+        '"""',
+        'PyLockWare Protected Application',
+        '"""',
+        '',
+        'from pylockware import external, skip_obf, crypt',
+        '',
+        '',
+        '# === PUBLIC API (names preserved) ===',
+        '',
+        '@external',
+        'def greet(name: str) -> str:',
+        '    """Public — visible from outside"""',
+        '    return _format_greeting(name)',
+        '',
+        '',
+        '@external',
+        'def add(a: int, b: int) -> int:',
+        '    """Public — visible from outside"""',
+        '    return _calculate(a, b)',
+        '',
+        '',
+        '# === INTERNAL (will be obfuscated) ===',
+        '',
+        'def _format_greeting(name: str) -> str:',
+        '    """Internal — will be obfuscated"""',
+        '    return f"Hello, {name.title()}!"',
+        '',
+        '',
+        'def _calculate(x: int, y: int) -> int:',
+        '    """Internal — will be obfuscated"""',
+        '    return (x * 2 + y * 3) % 1000',
+        '',
+        '',
+        '# === CRYPT (machine-locked encryption) ===',
+        '',
+        '@crypt',
+        'def authenticate(user: str, password: str) -> dict:',
+        '    """Sensitive — encrypted with machine fingerprint"""',
+        '    secret = "admin123"',
+        '    if user == "admin" and password == secret:',
+        '        result = {"status": "ok"}',
+        '    else:',
+        '        result = {"status": "denied"}',
+        '    return result',
+        '',
+        '',
+        '# === DEBUG (remove @skip_obf in production!) ===',
+        '',
+        '@skip_obf',
+        'def debug_status():',
+        '    """DEBUG: not obfuscated! Remove @skip_obf before release."""',
+        '    print("[DEBUG] App running — internal logic exposed for debugging")',
+        '',
+        '',
+        '# === ENTRY POINT ===',
+        '',
+        '@external',
+        f'def {entry_function}():',
+        '    """Main entry point"""',
+        '    print("=" * 40)',
+        '    print("PyLockWare Protected App")',
+        '    print("=" * 40)',
+        '',
+        '    # Public API demo',
+        '    print(greet("world"))',
+        '    print(f"Result: {add(10, 20)}")',
+        '',
+        '    # Crypt demo',
+        '    print(authenticate("admin", "admin123"))',
+        '    print(authenticate("x", "y"))',
+        '',
+        '    # Debug (remove in production)',
+        '    debug_status()',
+        '',
+        '    print("=" * 40)',
+        '',
+        '',
+        'if __name__ == "__main__":',
+        f'    {entry_function}()',
+    ]
+    return '\n'.join(lines)
 
 
 def _get_gitignore_template(output_dir: str) -> str:
