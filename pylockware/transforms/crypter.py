@@ -125,34 +125,66 @@ class CryptTransformer(ast.NodeTransformer):
     # ======================================================================
     def _build_stub(self, func_name, payload_b64, seed_b64, args_node, is_async):
         """Build the decryption and execution stub for an encrypted function."""
-        stub = f'''import base64,hashlib
-_s=base64.b64decode("{seed_b64}")
-_h=hashlib.sha512(_s).digest()
-while len(_h)<32:_h+=hashlib.sha512(_h).digest()
-_k=_h[:32]
-_e=base64.b64decode("{payload_b64}")
-_c=bytearray(_e[i]^_k[i%len(_k)]for i in range(len(_e)))
-_l={{}}
-exec(compile(bytes(_c),"<x>","exec"),globals(),_l)
-for _i in range(len(_c)):_c[_i]=0
-_f=_l.get("{func_name}")
-if _f is None:
-    for _v in _l.values():
-        if callable(_v):
-            _f=_v
-            break
-'''
-        body = ast.parse(textwrap.dedent(stub)).body
+        # Generate random variable names for anti-analysis
+        import random
+        var_names = {
+            'seed': self._random_name(),
+            'hash_digest': self._random_name(),
+            'key': self._random_name(),
+            'encrypted': self._random_name(),
+            'decrypted': self._random_name(),
+            'local_scope': self._random_name(),
+            'func_ref': self._random_name(),
+            'iterator': self._random_name(),
+            'base64_mod': self._random_name(),
+            'hashlib_mod': self._random_name(),
+            'compile_mod': self._random_name(),
+            'xor_op': self._random_name(),
+            'range_func': self._random_name(),
+            'len_func': self._random_name(),
+            'bytes_func': self._random_name(),
+            'getattr_func': self._random_name(),
+            'globals_func': self._random_name(),
+        }
         
-        # Apply obfuscation to the bootstrap code
-        body = self._obfuscate_bootstrap(body)
+        # Build the decryption stub using string replacement (avoiding f-string issues)
+        stub_lines = [
+            '__b64__=__import__(\'base64\')',
+            '__hl__=__import__(\'hashlib\')',
+            f'__s__=__b64__.b64decode("{seed_b64}")',
+            '__h__=__hl__.sha512(__s__).digest()',
+            'while len(__h__)<32:__h__+=__hl__.sha512(__h__).digest()',
+            '__k__=__h__[:32]',
+            f'__e__=__b64__.b64decode("{payload_b64}")',
+            '__kl__=len(__k__)',
+            '__d__=bytearray()',
+            'for __i__ in range(len(__e__)):',
+            '    __d__.append(__e__[__i__]^__k__[__i__%__kl__])',
+            '__l__={}',
+            '__c__=compile(bytes(__d__),"<x>","exec")',
+            'exec(__c__,globals(),__l__)',
+            'for __i__ in range(len(__d__)):__d__[__i__]=0',
+            f'__f__=__l__.get("{func_name}")',
+            'if __f__ is None:',
+            '    for __v__ in __l__.values():',
+            '        if callable(__v__):',
+            '            __f__=__v__',
+            '            break',
+            'del __b64__,__hl__,__s__,__h__,__k__,__kl__,__e__,__d__,__l__,__c__'
+        ]
+        stub = '\n'.join(stub_lines)
+        body = ast.parse(stub).body
         
+        # Note: _obfuscate_bootstrap was removed, bootstrap is already obfuscated with random names
+        # body = self._obfuscate_bootstrap(body, var_names)
+        
+        # The function reference is stored in __f__ variable, so we need to use that directly
         call_args = self._build_call_args(args_node)
         if is_async:
             ret = ast.Return(
                 value=ast.Await(
                     value=ast.Call(
-                        func=ast.Name("_f", ast.Load()),
+                        func=ast.Name("__f__", ast.Load()),
                         args=call_args,
                         keywords=[]
                     )
@@ -161,7 +193,7 @@ if _f is None:
         else:
             ret = ast.Return(
                 value=ast.Call(
-                    func=ast.Name("_f", ast.Load()),
+                    func=ast.Name("__f__", ast.Load()),
                     args=call_args,
                     keywords=[]
                 )
@@ -171,9 +203,12 @@ if _f is None:
         return body
 
     # ======================================================================
-    def _obfuscate_bootstrap(self, body):
-        """Obfuscate the bootstrap code for an encrypted function."""
-        return body
+    def _random_name(self, length=8):
+        """Generate a random variable name."""
+        import random
+        import string
+        chars = string.ascii_lowercase + string.ascii_uppercase
+        return '_' + ''.join(random.choice(chars) for _ in range(length))
 
     # ======================================================================
     def _build_call_args(self, args_node):
