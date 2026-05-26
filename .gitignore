@@ -1,59 +1,46 @@
-dist
-__pycache__
-/.vs/
-.vs
-.qwen
-.venv
-antidebug_temp
-/.vs/slnx.sqlite
-/.vs/PyLockWare.slnx/v18/Browse.VC.db-wal
-native_src\PyLockWareRuntime\.vs
-.venv
-nuitka_dist
-/crackme/
-tools
-.kiro
-
-# PyLockWare
-dist/
+```
+# Compiled Python files
 *.pyc
 __pycache__/
 
-# Python
-*.py[cod]
-*$py.class
-*.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual Environment
+# Virtual environments
+.venv/
 venv/
 env/
-ENV/
-.venv
 
-# IDEs
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.swp
+
+# Environment files
+.env
+.env.local
+*.env.*
+
+# Coverage reports
+.coverage
+coverage/
+htmlcov/
+
+# IDE files
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
 
-# OS
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.mypy_cache/
+
+# OS files
 .DS_Store
 Thumbs.db
-
+```

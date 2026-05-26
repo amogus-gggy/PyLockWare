@@ -125,7 +125,7 @@ class CryptTransformer(ast.NodeTransformer):
     # ======================================================================
     def _build_stub(self, func_name, payload_b64, seed_b64, args_node, is_async):
         """Build the decryption and execution stub for an encrypted function."""
-        stub = f'''import base64,hashlib
+        stub = f'''import base64,hashlib,builtins as _b
 _s=base64.b64decode("{seed_b64}")
 _h=hashlib.sha512(_s).digest()
 while len(_h)<32:_h+=hashlib.sha512(_h).digest()
@@ -133,7 +133,11 @@ _k=_h[:32]
 _e=base64.b64decode("{payload_b64}")
 _c=bytearray(_e[i]^_k[i%len(_k)]for i in range(len(_e)))
 _l={{}}
-exec(compile(bytes(_c),"<x>","exec"),globals(),_l)
+# Protect against builtin substitution attacks
+_compile=_b.__dict__.get("compile")
+if _compile is None or not callable(_compile):
+    raise RuntimeError("builtin integrity check failed")
+exec(_compile(bytes(_c),"<x>","exec"),globals(),_l)
 for _i in range(len(_c)):_c[_i]=0
 _f=_l.get("{func_name}")
 if _f is None:
