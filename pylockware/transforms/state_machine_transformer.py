@@ -18,6 +18,8 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.junk_states = []
         self.block_to_state_map = {}
         self.state_to_block_map = {}
+        # NEW: Track which block comes after each block in original order
+        self.block_next_map = {}
 
     # -----------------------------
     # Utility
@@ -36,6 +38,17 @@ class StateMachineTransformer(ast.NodeTransformer):
         """Check if node contains await expressions"""
         return any(isinstance(n, ast.Await) for n in ast.walk(node))
 
+    def _contains_state_transition(self, node, state_var_name):
+        """Recursively check if node or any child contains assignment to state_var"""
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id == state_var_name:
+                    return True
+        for child in ast.iter_child_nodes(node):
+            if self._contains_state_transition(child, state_var_name):
+                return True
+        return False
+
     # -----------------------------
     # Junk State Generation
     # -----------------------------
@@ -51,12 +64,18 @@ class StateMachineTransformer(ast.NodeTransformer):
             used_states.add(self.final_state)
 
         for i in range(num_junk_states):
-            while True:
+            attempts = 0
+            while attempts < 1000:
                 junk_state = random.randint(1000, 999999)
                 if junk_state not in used_states:
                     used_states.add(junk_state)
                     self.junk_states.append(junk_state)
                     break
+                attempts += 1
+            else:
+                junk_state = max(used_states) + 1 if used_states else 1000000
+                used_states.add(junk_state)
+                self.junk_states.append(junk_state)
 
             junk_block = self._generate_junk_code_block()
 
@@ -407,7 +426,8 @@ class StateMachineTransformer(ast.NodeTransformer):
         old_block_to_state_map = self.block_to_state_map
         old_state_to_block_map = self.state_to_block_map
         old_final_state = self.final_state
-        
+        old_block_next_map = self.block_next_map
+
         self.state_var = self._rand("")
         ret_var = self._rand("")
 
@@ -416,11 +436,11 @@ class StateMachineTransformer(ast.NodeTransformer):
 
         # NEVER transform async generators - they must keep yield
         if is_generator:
-
             self.state_var = old_state
             self.block_to_state_map = old_block_to_state_map
             self.state_to_block_map = old_state_to_block_map
             self.final_state = old_final_state
+            self.block_next_map = old_block_next_map
             return self.generic_visit(node)
 
         # Hoist global/nonlocal declarations - they must appear before any use
@@ -435,34 +455,49 @@ class StateMachineTransformer(ast.NodeTransformer):
         is_expanded_loop = loop_stmt is not None
 
         if is_expanded_loop:
-
             blocks = expanded_blocks
 
         if len(blocks) <= 1 and not is_generator:
-
             self.state_var = old_state
             return self.generic_visit(node)
+
+        # NEW: Build block_next_map BEFORE shuffling
+        # block_next_map[i] = index of the block that comes after block i in original order
+        self.block_next_map = {}
+        for i in range(len(blocks) - 1):
+            self.block_next_map[i] = i + 1
+        self.block_next_map[len(blocks) - 1] = None  # Last block has no next
 
         # Generate random state values for each block
         unique_states = set()
         state_values = []
 
         for i in range(len(blocks)):
-            while True:
+            attempts = 0
+            while attempts < 10000:
                 rand_state = random.randint(1000, 999999)
                 if rand_state not in unique_states:
                     unique_states.add(rand_state)
                     state_values.append(rand_state)
                     break
+                attempts += 1
+            else:
+                rand_state = max(unique_states) + 1 if unique_states else 1000000
+                unique_states.add(rand_state)
+                state_values.append(rand_state)
 
         self.block_to_state_map = dict(zip(range(len(blocks)), state_values))
         self.state_to_block_map = dict(zip(state_values, range(len(blocks))))
 
-        while True:
+        attempts = 0
+        while attempts < 10000:
             final_rand_state = random.randint(1000, 999999)
             if final_rand_state not in unique_states:
                 self.final_state = final_rand_state
                 break
+            attempts += 1
+        else:
+            self.final_state = max(unique_states) + 1 if unique_states else 1000000
 
         # -----------------------------
         # Generate async state machine
@@ -493,7 +528,7 @@ class StateMachineTransformer(ast.NodeTransformer):
 
         cases = []
 
-        # Generate branches for each block with random states
+        # KEEP random.shuffle for obfuscation
         block_indices = list(range(len(blocks)))
         random.shuffle(block_indices)
 
@@ -519,58 +554,47 @@ class StateMachineTransformer(ast.NodeTransformer):
             junk_cases = self._generate_junk_states(num_junk_states=random.randint(2, 5))
             cases.extend(junk_cases)
 
-        # Use regular while loop - await expressions inside will work fine
-        if is_expanded_loop:
-            loop = ast.While(
-                test=ast.Constant(value=True),
-                body=cases,
-                orelse=[],
-            )
-        else:
-            loop = ast.While(
-                test=ast.Compare(
-                    left=ast.Name(id=self.state_var, ctx=ast.Load()),
-                    ops=[ast.NotEq()],
-                    comparators=[ast.Constant(self.final_state)],
-                ),
-                body=cases,
-                orelse=[],
-            )
+        # FIX: Always use while state != final_state - never while True
+        loop = ast.While(
+            test=ast.Compare(
+                left=ast.Name(id=self.state_var, ctx=ast.Load()),
+                ops=[ast.NotEq()],
+                comparators=[ast.Constant(self.final_state)],
+            ),
+            body=cases,
+            orelse=[],
+        )
 
         new_body.append(loop)
 
         # return
-        if not is_expanded_loop:
-            if is_generator:
-                new_body.append(ast.Return(value=None))
-            else:
-                new_body.append(ast.Return(value=ast.Name(id=ret_var, ctx=ast.Load())))
+        if is_generator:
+            new_body.append(ast.Return(value=None))
+        else:
+            new_body.append(ast.Return(value=ast.Name(id=ret_var, ctx=ast.Load())))
 
         node.body = new_body
         self.state_var = old_state
         self.block_to_state_map = old_block_to_state_map
         self.state_to_block_map = old_state_to_block_map
         self.final_state = old_final_state
+        self.block_next_map = old_block_next_map
         return node
 
     def visit_FunctionDef(self, node):
         # Check for @skip_obf decorator
         for decorator in node.decorator_list:
             if isinstance(decorator, ast.Name) and decorator.id == 'skip_obf':
-
                 return self.generic_visit(node)
             elif isinstance(decorator, ast.Attribute) and decorator.attr == 'skip_obf':
-
                 return self.generic_visit(node)
-        
+
         # Skip functions that contain async - they're handled by visit_AsyncFunctionDef
         if self._contains_async(node):
-
             return self.generic_visit(node)
 
         # Minimum size check
         if len(node.body) < 1:
-
             return self.generic_visit(node)
 
         self.func_counter += 1
@@ -578,6 +602,7 @@ class StateMachineTransformer(ast.NodeTransformer):
         old_block_to_state_map = self.block_to_state_map
         old_state_to_block_map = self.state_to_block_map
         old_final_state = self.final_state
+        old_block_next_map = self.block_next_map
         self.state_var = self._rand("")
         ret_var = self._rand("")
 
@@ -595,34 +620,48 @@ class StateMachineTransformer(ast.NodeTransformer):
         is_expanded_loop = loop_stmt is not None
 
         if is_expanded_loop:
-
             blocks = expanded_blocks
 
         if len(blocks) <= 1 and not is_generator:
-
             self.state_var = old_state
             return self.generic_visit(node)
+
+        # NEW: Build block_next_map BEFORE shuffling
+        self.block_next_map = {}
+        for i in range(len(blocks) - 1):
+            self.block_next_map[i] = i + 1
+        self.block_next_map[len(blocks) - 1] = None
 
         # Generate random state values for each block
         unique_states = set()
         state_values = []
 
         for i in range(len(blocks)):
-            while True:
+            attempts = 0
+            while attempts < 10000:
                 rand_state = random.randint(1000, 999999)
                 if rand_state not in unique_states:
                     unique_states.add(rand_state)
                     state_values.append(rand_state)
                     break
+                attempts += 1
+            else:
+                rand_state = max(unique_states) + 1 if unique_states else 1000000
+                unique_states.add(rand_state)
+                state_values.append(rand_state)
 
         self.block_to_state_map = dict(zip(range(len(blocks)), state_values))
         self.state_to_block_map = dict(zip(state_values, range(len(blocks))))
 
-        while True:
+        attempts = 0
+        while attempts < 10000:
             final_rand_state = random.randint(1000, 999999)
             if final_rand_state not in unique_states:
                 self.final_state = final_rand_state
                 break
+            attempts += 1
+        else:
+            self.final_state = max(unique_states) + 1 if unique_states else 1000000
 
         # -----------------------------
         # Generate state machine
@@ -653,7 +692,7 @@ class StateMachineTransformer(ast.NodeTransformer):
 
         cases = []
 
-        # Generate branches for each block with random states
+        # KEEP random.shuffle for obfuscation
         block_indices = list(range(len(blocks)))
         random.shuffle(block_indices)
 
@@ -679,30 +718,21 @@ class StateMachineTransformer(ast.NodeTransformer):
             junk_cases = self._generate_junk_states(num_junk_states=random.randint(2, 5))
             cases.extend(junk_cases)
 
-        # while state != FINAL (or while True for expanded loop)
-        if is_expanded_loop:
-            loop = ast.While(
-                test=ast.Constant(value=True),
-                body=cases,
-                orelse=[],
-            )
-        else:
-            loop = ast.While(
-                test=ast.Compare(
-                    left=ast.Name(id=self.state_var, ctx=ast.Load()),
-                    ops=[ast.NotEq()],
-                    comparators=[ast.Constant(self.final_state)],
-                ),
-                body=cases,
-                orelse=[],
-            )
+        # FIX: Always use while state != final_state - never while True
+        loop = ast.While(
+            test=ast.Compare(
+                left=ast.Name(id=self.state_var, ctx=ast.Load()),
+                ops=[ast.NotEq()],
+                comparators=[ast.Constant(self.final_state)],
+            ),
+            body=cases,
+            orelse=[],
+        )
 
         new_body.append(loop)
 
-        # return (only for non-expanded loops)
-        if is_expanded_loop:
-            pass
-        elif is_generator:
+        # return (for non-generator functions)
+        if is_generator:
             new_body.append(ast.Return(value=None))
         else:
             new_body.append(ast.Return(value=ast.Name(id=ret_var, ctx=ast.Load())))
@@ -712,6 +742,7 @@ class StateMachineTransformer(ast.NodeTransformer):
         self.block_to_state_map = old_block_to_state_map
         self.state_to_block_map = old_state_to_block_map
         self.final_state = old_final_state
+        self.block_next_map = old_block_next_map
         return node
 
     def _split_into_blocks(self, body):
@@ -751,7 +782,6 @@ class StateMachineTransformer(ast.NodeTransformer):
             stmt = blocks[0][0]
             if isinstance(stmt, (ast.While, ast.For)) and len(stmt.body) > 1:
                 expanded_blocks = self._split_into_blocks(stmt.body)
-
                 return expanded_blocks, stmt
         return blocks, None
 
@@ -761,8 +791,6 @@ class StateMachineTransformer(ast.NodeTransformer):
 
         for stmt in block:
             if isinstance(stmt, ast.Return):
-                # NEVER use yield for async functions - it turns them into async generators!
-                # Always use ret_var assignment for async functions
                 if is_generator and not is_async:
                     if stmt.value:
                         case_body.append(ast.Expr(value=ast.Yield(value=stmt.value)))
@@ -774,21 +802,13 @@ class StateMachineTransformer(ast.NodeTransformer):
                             value=stmt.value if stmt.value else ast.Constant(None),
                         )
                     )
-                    if is_expanded_loop:
-                        first_state = self.block_to_state_map[0]
-                        case_body.append(
-                            ast.Assign(
-                                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                                value=ast.Constant(first_state),
-                            )
+                    # FIX: Return ALWAYS sets state to final_state to exit the loop
+                    case_body.append(
+                        ast.Assign(
+                            targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
+                            value=ast.Constant(self.final_state),
                         )
-                    else:
-                        case_body.append(
-                            ast.Assign(
-                                targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                                value=ast.Constant(self.final_state),
-                            )
-                        )
+                    )
 
             elif isinstance(stmt, (ast.For, ast.While)):
                 case_body.extend(self._process_loop(stmt, idx, total_blocks, is_expanded_loop))
@@ -809,18 +829,16 @@ class StateMachineTransformer(ast.NodeTransformer):
                 case_body.append(stmt)
 
         # transition to next state (only if no other transitions in the body)
+        # FIX: Use recursive check to detect nested state transitions
         has_explicit_transition = any(
-            isinstance(s, ast.Assign) and
-            isinstance(s.targets[0], ast.Name) and
-            s.targets[0].id == self.state_var
+            self._contains_state_transition(s, self.state_var)
             for s in case_body
         )
 
         if not has_explicit_transition:
-            # Find the next block index
-            next_block_idx = idx + 1
-            if next_block_idx < total_blocks and next_block_idx in self.block_to_state_map:
-                # Get the state value for the next block
+            # FIX: Use block_next_map instead of idx + 1 to handle shuffled blocks
+            next_block_idx = self.block_next_map.get(idx)
+            if next_block_idx is not None and next_block_idx in self.block_to_state_map:
                 next_state = self.block_to_state_map[next_block_idx]
                 case_body.append(
                     ast.Assign(
@@ -829,35 +847,23 @@ class StateMachineTransformer(ast.NodeTransformer):
                     )
                 )
             else:
-                # No next block or not in state map - go to final state or loop back
-                if is_expanded_loop:
-                    first_state = self.block_to_state_map.get(0, self.final_state)
-                    case_body.append(
-                        ast.Assign(
-                            targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                            value=ast.Constant(first_state),
-                        )
+                # No next block - go to final state (exit the loop)
+                case_body.append(
+                    ast.Assign(
+                        targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
+                        value=ast.Constant(self.final_state),
                     )
-                else:
-                    case_body.append(
-                        ast.Assign(
-                            targets=[ast.Name(id=self.state_var, ctx=ast.Store())],
-                            value=ast.Constant(self.final_state),
-                        )
-                    )
+                )
 
         return case_body
 
     def _process_loop(self, loop_node, current_idx, total_blocks, is_expanded_loop=False):
         """Process loop"""
         body = [loop_node]
-        next_idx = current_idx + 1
-        if next_idx < total_blocks:
-            next_state = self.block_to_state_map[next_idx]
+        next_block_idx = self.block_next_map.get(current_idx)
+        if next_block_idx is not None and next_block_idx in self.block_to_state_map:
+            next_state = self.block_to_state_map[next_block_idx]
             state_value = ast.Constant(next_state)
-        elif is_expanded_loop:
-            first_state = self.block_to_state_map[0]
-            state_value = ast.Constant(first_state)
         else:
             state_value = ast.Constant(self.final_state)
 
@@ -872,13 +878,10 @@ class StateMachineTransformer(ast.NodeTransformer):
     def _process_async_for(self, async_for_node, current_idx, total_blocks, is_expanded_loop=False):
         """Process async for loop"""
         body = [async_for_node]
-        next_idx = current_idx + 1
-        if next_idx < total_blocks:
-            next_state = self.block_to_state_map[next_idx]
+        next_block_idx = self.block_next_map.get(current_idx)
+        if next_block_idx is not None and next_block_idx in self.block_to_state_map:
+            next_state = self.block_to_state_map[next_block_idx]
             state_value = ast.Constant(next_state)
-        elif is_expanded_loop:
-            first_state = self.block_to_state_map[0]
-            state_value = ast.Constant(first_state)
         else:
             state_value = ast.Constant(self.final_state)
 
@@ -893,13 +896,10 @@ class StateMachineTransformer(ast.NodeTransformer):
     def _process_async_with(self, async_with_node, current_idx, total_blocks, is_expanded_loop=False):
         """Process async with statement"""
         body = [async_with_node]
-        next_idx = current_idx + 1
-        if next_idx < total_blocks:
-            next_state = self.block_to_state_map[next_idx]
+        next_block_idx = self.block_next_map.get(current_idx)
+        if next_block_idx is not None and next_block_idx in self.block_to_state_map:
+            next_state = self.block_to_state_map[next_block_idx]
             state_value = ast.Constant(next_state)
-        elif is_expanded_loop:
-            first_state = self.block_to_state_map[0]
-            state_value = ast.Constant(first_state)
         else:
             state_value = ast.Constant(self.final_state)
 
@@ -913,14 +913,11 @@ class StateMachineTransformer(ast.NodeTransformer):
 
     def _process_try(self, try_node, current_idx, total_blocks, is_expanded_loop=False):
         """Process try-except"""
-        next_idx = current_idx + 1
+        next_block_idx = self.block_next_map.get(current_idx)
         body = [try_node]
-        if next_idx < total_blocks:
-            next_state = self.block_to_state_map[next_idx]
+        if next_block_idx is not None and next_block_idx in self.block_to_state_map:
+            next_state = self.block_to_state_map[next_block_idx]
             state_value = ast.Constant(next_state)
-        elif is_expanded_loop:
-            first_state = self.block_to_state_map[0]
-            state_value = ast.Constant(first_state)
         else:
             state_value = ast.Constant(self.final_state)
 
@@ -935,15 +932,12 @@ class StateMachineTransformer(ast.NodeTransformer):
     def apply_transformation(self, code):
         """Apply state machine transformation to Python code."""
         try:
-
             tree = ast.parse(code)
             transformed_tree = self.visit(tree)
             ast.fix_missing_locations(transformed_tree)
             result = ast.unparse(transformed_tree)
-
             return result
         except Exception as e:
-
             import traceback
             traceback.print_exc()
             return code
