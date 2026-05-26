@@ -27,50 +27,94 @@ MAX_TARGET = 10000
 MAX_ATTEMPTS = 50
 
 
-def atomic_expr(n: int) -> str:
+def atomic_expr(n: int, use_runtime_noise: bool = True) -> str:
     """
     Гарантированно возвращает выражение != литералу,
     которое вычисляется в n
+    
+    Args:
+        n: число для обфускации
+        use_runtime_noise: если False, использует только детерминированные выражения
+                          (без hash/os.getpid) для критического кода
     """
     if n == 0:
-        choices = [
-            "(~(-1))",
-            "(lambda: 0)()",
-            "len([])",
-            "hash('') % 1",
-            "sys.getsizeof(()) - sys.getsizeof(())",
-        ]
+        if use_runtime_noise:
+            choices = [
+                "(~(-1))",
+                "(lambda: 0)()",
+                "len([])",
+                "hash('') % 1",
+                "sys.getsizeof(()) - sys.getsizeof(())",
+            ]
+        else:
+            # Только детерминированные выражения
+            choices = [
+                "(~(-1))",
+                "(lambda: 0)()",
+                "len([])",
+                "(0 + 1 - 1)",
+                "(0 * 1)",
+            ]
         return random.choice(choices)
 
     if n == 1:
-        choices = [
-            "(2 >> 1)",
-            "len([None])",
-            "bool([None])",
-            "hash('a') % 2",
-            "(os.getpid() % 2) ^ (os.getpid() % 2) ^ 1",
-        ]
+        if use_runtime_noise:
+            choices = [
+                "(2 >> 1)",
+                "len([None])",
+                "bool([None])",
+                "hash('a') % 2",
+                "(os.getpid() % 2) ^ (os.getpid() % 2) ^ 1",
+            ]
+        else:
+            # Только детерминированные выражения
+            choices = [
+                "(2 >> 1)",
+                "len([None])",
+                "bool([None])",
+                "(2 - 1)",
+                "(1 * 1)",
+            ]
         return random.choice(choices)
 
     if n == -1:
-        choices = [
-            "(~0)",
-            "-(len([None]))",
-            "-(bool([None]))",
-            "hash('') % 1 - 1",
-        ]
+        if use_runtime_noise:
+            choices = [
+                "(~0)",
+                "-(len([None]))",
+                "-(bool([None]))",
+                "hash('') % 1 - 1",
+            ]
+        else:
+            # Только детерминированные выражения
+            choices = [
+                "(~0)",
+                "-(len([None]))",
+                "-(bool([None]))",
+                "(0 - 1)",
+                "(-1 * 1)",
+            ]
         return random.choice(choices)
 
     if n < 0:
-        return f"(-{atomic_expr(-n)})"
+        return f"(-{atomic_expr(-n, use_runtime_noise)})"
 
     k = random.randint(1, 10)
-    noise_techniques = [
-        f"(({n + k}) - {k})",
-        f"(({n + k}) ^ {random.randint(1, 255)} ^ {random.randint(1, 255)}) - {k}",
-        f"(({n + k} + (hash(str({k})) % {k})) - (hash(str({k})) % {k}) - {k})",
-        f"(({n + k} + (os.getpid() % {k})) - (os.getpid() % {k}) - {k})",
-    ]
+    if use_runtime_noise:
+        noise_techniques = [
+            f"(({n + k}) - {k})",
+            f"(({n + k}) ^ {random.randint(1, 255)} ^ {random.randint(1, 255)}) - {k}",
+            f"(({n + k} + (hash(str({k})) % {k})) - (hash(str({k})) % {k}) - {k})",
+            f"(({n + k} + (os.getpid() % {k})) - (os.getpid() % {k}) - {k})",
+        ]
+    else:
+        # Только детерминированные выражения без runtime noise
+        noise_techniques = [
+            f"(({n + k}) - {k})",
+            f"(({n + k}) ^ {random.randint(1, 255)} ^ {random.randint(1, 255)}) - {k}",
+            f"(({n + k * 2}) - {k} - {k})",
+            f"(({n - k}) + {k})",
+        ]
     return random.choice(noise_techniques)
 
 
