@@ -27,92 +27,159 @@ MAX_TARGET = 10000
 MAX_ATTEMPTS = 50
 
 
+import random
+
+
 def atomic_expr(n: int, use_runtime_noise: bool = False) -> str:
     """
-    Гарантированно возвращает выражение != литералу,
-    которое вычисляется в n
-    
+    Возвращает выражение, которое вычисляется в n,
+    но старается не выглядеть как литерал.
+
+    ВАЖНО:
+    - никаких hash(), os.getpid(), random() в результирующем коде
+    - никаких runtime side effects
+    - никаких тяжелых конструкций
+    - выражения всегда deterministic
+    - выражения O(1)
+
     Args:
         n: число для обфускации
-        use_runtime_noise: если False, использует только детерминированные выражения
-                          (без hash/os.getpid) для критического кода
+        use_runtime_noise:
+            оставлен для совместимости, но runtime noise отключен намеренно
     """
-    if n == 0:
-        if use_runtime_noise:
-            choices = [
-                "(~(-1))",
-                "(lambda: 0)()",
-                "len([])",
-                "hash('') % 1",
-                "sys.getsizeof(()) - sys.getsizeof(())",
-            ]
-        else:
-            # Только детерминированные выражения
-            choices = [
-                "0"
-            ] # TODO: fix all this crap to reduce conflicts
-        return random.choice(choices)
 
-    if n == 1:
-        if use_runtime_noise:
-            choices = [
-                "(2 >> 1)",
-                "len([None])",
-                "bool([None])",
-                "hash('a') % 2",
-                "(os.getpid() % 2) ^ (os.getpid() % 2) ^ 1",
-            ]
-        else:
-            # Только детерминированные выражения
-            choices = [
-                "(2 >> 1)",
-                "len([None])",
-                "bool([None])",
-                "(2 - 1)",
-                "(1 * 1)",
-            ]
-        return random.choice(choices)
+    # ---------- helpers ----------
 
-    if n == -1:
-        if use_runtime_noise:
-            choices = [
-                "(~0)",
-                "-(len([None]))",
-                "-(bool([None]))",
-                "hash('') % 1 - 1",
-            ]
-        else:
-            # Только детерминированные выражения
-            choices = [
-                "(~0)",
-                "-(len([None]))",
-                "-(bool([None]))",
-                "(0 - 1)",
-                "(-1 * 1)",
-            ]
-        return random.choice(choices)
+    def wrap(x: str) -> str:
+        return f"({x})"
+
+    def xor_zero() -> str:
+        a = random.randint(1, 255)
+        return f"({a}^{a})"
+
+    def mul_one() -> str:
+        a = random.randint(2, 9)
+        return f"({a}//{a})"
+
+    def add_zero(expr: str) -> str:
+        return f"({expr}+{xor_zero()})"
+
+    def sub_zero(expr: str) -> str:
+        return f"({expr}-{xor_zero()})"
+
+    def mul_by_one(expr: str) -> str:
+        return f"({expr}*{mul_one()})"
+
+    def div_by_one(expr: str) -> str:
+        return f"({expr}//{mul_one()})"
+
+    def bool_num(v: int) -> str:
+        if v == 0:
+            return "int(False)"
+        return "int(True)"
+
+    # ---------- tiny constants ----------
+
+    SMALL = {
+        0: [
+            "0",
+            "(1-1)",
+            "(~0+1)",
+            "(False+0)",
+            "(int(False))",
+            "(0^0)",
+        ],
+        1: [
+            "1",
+            "(2>>1)",
+            "(True+0)",
+            "(int(True))",
+            "(3%2)",
+            "(1^0)",
+        ],
+        -1: [
+            "(-1)",
+            "(~0)",
+            "(0-1)",
+            "(-True)",
+        ],
+    }
+
+    if n in SMALL:
+        expr = random.choice(SMALL[n])
+
+        # легкая дополнительная обертка
+        wrappers = [
+            lambda e: add_zero(e),
+            lambda e: sub_zero(e),
+            lambda e: mul_by_one(e),
+            lambda e: div_by_one(e),
+            lambda e: wrap(e),
+        ]
+
+        return random.choice(wrappers)(expr)
+
+    # ---------- negative ----------
 
     if n < 0:
-        return f"(-{atomic_expr(-n, use_runtime_noise)})"
+        return f"(-{atomic_expr(-n)})"
 
-    k = random.randint(1, 10)
-    if use_runtime_noise:
-        noise_techniques = [
-            f"(({n + k}) - {k})",
-            f"(({n + k}) ^ {random.randint(1, 255)} ^ {random.randint(1, 255)}) - {k}",
-            f"(({n + k} + (hash(str({k})) % {k})) - (hash(str({k})) % {k}) - {k})",
-            f"(({n + k} + (os.getpid() % {k})) - (os.getpid() % {k}) - {k})",
-        ]
-    else:
-        # Только детерминированные выражения без runtime noise
-        noise_techniques = [
-            f"(({n + k}) - {k})",
-            f"(({n + k}) ^ {random.randint(1, 255)} ^ {random.randint(1, 255)}) - {k}",
-            f"(({n + k * 2}) - {k} - {k})",
-            f"(({n - k}) + {k})",
-        ]
-    return random.choice(noise_techniques)
+    # ---------- deterministic templates ----------
 
+    k = random.randint(2, 32)
+    a = random.randint(1, 255)
+    b = a ^ random.randint(1, 255)
+
+    templates = [
+        # arithmetic
+        f"(({n + k})-{k})",
+        f"(({n - k})+{k})",
+        f"(({n}+{k})-{k})",
+
+        # double compensation
+        f"(({n + k * 2})-{k}-{k})",
+
+        # xor reversible
+        f"((({n}^{a})^{a}))",
+
+        # xor + arithmetic
+        f"(((({n + k})^{a})^{a})-{k})",
+
+        # multiplication/division identity
+        f"(({n}*{k})//{k})",
+
+        # bit tricks
+        f"(({n}<<1)>>1)",
+
+        # modulo identity
+        f"(({n}+({k}*{k}))-({k}*{k}))",
+
+        # boolean compensation
+        f"({n}+int(False))",
+
+        # nested
+        f"((({n + k})-({k}//1)))",
+    ]
+
+    expr = random.choice(templates)
+
+    # ---------- secondary wrapping ----------
+
+    wrappers = [
+        lambda e: add_zero(e),
+        lambda e: sub_zero(e),
+        lambda e: mul_by_one(e),
+        lambda e: div_by_one(e),
+        lambda e: wrap(e),
+        lambda e: f"(({e})<<1>>1)",
+        lambda e: f"(({e})+int(False))",
+    ]
+
+    # 1-3 harmless wrappers
+    for _ in range(random.randint(2, 4)):
+        expr = random.choice(wrappers)(expr)
+
+    return expr
 
 # Cache to prevent infinite recursion on same values
 _build_expr_cache = {}
