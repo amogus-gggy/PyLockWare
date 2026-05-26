@@ -27,7 +27,7 @@ MAX_TARGET = 10000
 MAX_ATTEMPTS = 50
 
 
-def atomic_expr(n: int, use_runtime_noise: bool = True) -> str:
+def atomic_expr(n: int, use_runtime_noise: bool = False) -> str:
     """
     Гарантированно возвращает выражение != литералу,
     которое вычисляется в n
@@ -49,12 +49,8 @@ def atomic_expr(n: int, use_runtime_noise: bool = True) -> str:
         else:
             # Только детерминированные выражения
             choices = [
-                "(~(-1))",
-                "(lambda: 0)()",
-                "len([])",
-                "(0 + 1 - 1)",
-                "(0 * 1)",
-            ]
+                "0"
+            ] # TODO: fix all this crap to reduce conflicts
         return random.choice(choices)
 
     if n == 1:
