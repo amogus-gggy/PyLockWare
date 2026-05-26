@@ -2,10 +2,8 @@
 import random
 import ast
 import operator
-import time
 import sys
 import os
-from multiprocessing import Pool, cpu_count
 from functools import partial
 
 OPS = {
@@ -55,7 +53,6 @@ def atomic_expr(n: int) -> str:
             "-(len([None]))",             # Negative length
             "-(bool([None]))",            # Negative boolean
             "hash('') % 1 - 1",           # Hash calculation
-            "(time.time_ns() % 2) - (time.time_ns() % 2) - 1",  # Runtime
         ]
         return random.choice(choices)
 
@@ -143,16 +140,13 @@ def build_expr(target: int, depth: int, max_depth: int) -> str:
 
         # Add runtime noise that cancels out (anti-inlining)
         if random.random() < 0.3:  # 30% chance to add noise
-            noise_type = random.choice(['hash', 'pid', 'time', 'platform'])
+            noise_type = random.choice(['hash', 'pid', 'platform'])
             if noise_type == 'hash':
                 noise_val = random.randint(1, 100)
                 expr = f"({expr} + (hash(str({noise_val})) % {noise_val}) - (hash(str({noise_val})) % {noise_val}))"
             elif noise_type == 'pid':
                 noise_val = random.randint(1, 10)
                 expr = f"({expr} + (os.getpid() % {noise_val}) - (os.getpid() % {noise_val}))"
-            elif noise_type == 'time':
-                noise_val = random.randint(1, 10)
-                expr = f"({expr} + (int(time.time()) % {noise_val}) - (int(time.time()) % {noise_val}))"
             elif noise_type == 'platform':
                 noise_val = random.randint(1, 10)
                 expr = f"({expr} + (hash(sys.platform) % {noise_val}) - (hash(sys.platform) % {noise_val}))"
@@ -193,7 +187,6 @@ def _create_function_based_expr(target: int) -> str:
         # Runtime-dependent with cancellation
         lambda: f"{target} + (os.getpid() % 100 - os.getpid() % 100)",
         lambda: f"{target} + (hash(sys.platform) % 10 - hash(sys.platform) % 10)",
-        lambda: f"{target} + (int(time.time()) % 10 - int(time.time()) % 10)",
     ]
 
     return random.choice(techniques)()
@@ -274,7 +267,7 @@ def get_imports_for_obfuscated_code() -> str:
     Returns import statements needed for the obfuscated code to work.
     These imports are required for runtime-dependent expressions.
     """
-    return "import os\nimport time\nimport sys\n"
+    return "import os\nimport sys\n"
 
 def obfuscate_float(n: float) -> str:
     """
@@ -305,10 +298,10 @@ def obfuscate_float(n: float) -> str:
 class NumberObfuscator(ast.NodeTransformer):
     """AST transformer to obfuscate integer and float literals in Python code."""
 
-    def __init__(self, use_parallel=True):
+    def __init__(self, use_parallel=False):
         self.number_counter = 0
         self.required_imports = set()  # Track required imports
-        self.use_parallel = use_parallel
+        self.use_parallel = use_parallel  # Disabled by default due to hanging issues
 
         # Track if we're inside a @skip_obf function/class
         self.skip_obf_depth = 0
@@ -392,8 +385,6 @@ class NumberObfuscator(ast.NodeTransformer):
             # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
-            if 'time.time()' in obfuscated_expr or 'time.time_ns()' in obfuscated_expr:
-                self.required_imports.add('time')
             if 'sys.platform' in obfuscated_expr or 'sys.getsizeof' in obfuscated_expr:
                 self.required_imports.add('sys')
 
@@ -412,8 +403,6 @@ class NumberObfuscator(ast.NodeTransformer):
             # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
-            if 'time.time()' in obfuscated_expr or 'time.time_ns()' in obfuscated_expr:
-                self.required_imports.add('time')
             if 'sys.platform' in obfuscated_expr:
                 self.required_imports.add('sys')
 
@@ -441,8 +430,6 @@ class NumberObfuscator(ast.NodeTransformer):
             # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
-            if 'time.time()' in obfuscated_expr or 'time.time_ns()' in obfuscated_expr:
-                self.required_imports.add('time')
             if 'sys.platform' in obfuscated_expr or 'sys.getsizeof' in obfuscated_expr:
                 self.required_imports.add('sys')
 
@@ -461,8 +448,6 @@ class NumberObfuscator(ast.NodeTransformer):
             # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
-            if 'time.time()' in obfuscated_expr or 'time.time_ns()' in obfuscated_expr:
-                self.required_imports.add('time')
             if 'sys.platform' in obfuscated_expr:
                 self.required_imports.add('sys')
 
@@ -481,8 +466,6 @@ class NumberObfuscator(ast.NodeTransformer):
         imports = []
         if 'os' in self.required_imports:
             imports.append('import os')
-        if 'time' in self.required_imports:
-            imports.append('import time')
         if 'sys' in self.required_imports:
             imports.append('import sys')
         return '\n'.join(imports) if imports else ''
