@@ -6,7 +6,7 @@ PyLockWare SDK Configuration Management
 import tomli
 import tomli_w
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Union
 from dataclasses import dataclass, asdict, field
 
 
@@ -32,6 +32,7 @@ class BuildConfig:
     call_obf: bool = False
     crypt: bool = False
     disable_traceback: bool = True
+    anti_tamper_builtins: bool = True
     
     # Параметры обфускации
     junk_density: float = 0.5
@@ -40,7 +41,7 @@ class BuildConfig:
     banner: str = "Obfuscated by PyLockWare"
     
     # Анти-отладка
-    anti_debug: Optional[str] = None  # None, 'native', 'crossplatform'
+    anti_debug: Optional[Union[str, bool]] = None  # None/False, True, 'native', 'crossplatform'
     anti_debug_mode: str = "crossplatform"
     
     # Nuitka опции
@@ -177,6 +178,8 @@ def _save_pretty_toml(data: dict, path: Path, config: BuildConfig) -> None:
     lines.append(f"call_obf = {str(config.call_obf).lower()}")
     lines.append(f"crypt = {str(config.crypt).lower()}")
     lines.append(f"disable_traceback = {str(config.disable_traceback).lower()}")
+    lines.append(f"anti_tamper_builtins = {str(config.anti_tamper_builtins).lower()}")
+    lines.append(f"anti_debug = {str(bool(config.anti_debug)).lower()}")
     lines.append("")
 
     
@@ -188,12 +191,7 @@ def _save_pretty_toml(data: dict, path: Path, config: BuildConfig) -> None:
     lines.append("")
     
     lines.append("# Anti-Debug (leave commented to disable)")
-    if config.anti_debug:
-        lines.append(f'anti_debug = "{config.anti_debug}"')
-        lines.append(f'anti_debug_mode = "{config.anti_debug_mode}"')
-    else:
-        lines.append('# anti_debug = "native"  # or "crossplatform"')
-        lines.append(f'anti_debug_mode = "{config.anti_debug_mode}"')
+    lines.append(f'anti_debug_mode = "{config.anti_debug_mode}"')
     lines.append("")
     
     lines.append("# Nuitka Options (for compiling to executable)")

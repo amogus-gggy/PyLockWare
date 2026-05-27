@@ -27,6 +27,7 @@ from pylockware.modules.type_annotation_obf_module import TypeAnnotationObfModul
 from pylockware.modules.call_obf_module import CallObfModule
 from pylockware.modules.remove_annotations_module import RemoveAnnotationsModule
 from pylockware.modules.crypt_module import CryptModule
+from pylockware.modules.anti_tamper_builtins_module import AntiTamperBuiltinsModule
 
 
 class PyObfuscator:
@@ -47,7 +48,7 @@ class PyObfuscator:
                  nuitka_admin: bool = False, nuitka_plugins: List[str] = None, nuitka_extra_imports: List[str] = None,
                  nuitka_options: List[str] = None, disable_traceback: bool = False,
                  decorator_obf: bool = False, type_annotation_obf: bool = False, call_obf: bool = False,
-                 crypt: bool = False):
+                 crypt: bool = False, anti_tamper_builtins: bool = True):
         self.project_path = Path(project_path)
         self.entry_point = Path(entry_point)
         self.entry_function = entry_function
@@ -69,6 +70,7 @@ class PyObfuscator:
         self.type_annotation_obf = type_annotation_obf  # Enable type annotation obfuscation
         self.call_obf = call_obf  # Enable call obfuscation using getattr pattern
         self.crypt = crypt  # Enable function encryption using machine fingerprinting
+        self.anti_tamper_builtins = anti_tamper_builtins  # Enable runtime anti-tamper guard for builtins
 
         # Nuitka options
         self.enable_nuitka = enable_nuitka
@@ -217,20 +219,25 @@ class PyObfuscator:
         if self.disable_traceback:
             from pylockware.modules.disable_traceback_module import DisableTracebackModule
             self.module_manager.add_module(DisableTracebackModule({}))
-        # Add Nuitka module LAST so it runs after all obfuscation
+        # Add Nuitka module before final cleanup / runtime guards
         if self.enable_nuitka:
             self.module_manager.add_module(self.nuitka_module)
         
-        # Add RemoveAnnotations module ABSOLUTELY LAST to clean up decorators
+        # Add RemoveAnnotations module to clean up decorators
         self.module_manager.add_module(RemoveAnnotationsModule({}))
-
+        
         # Add crypt module if enabled - runs after all other obfuscation
         if self.crypt:
             self.module_manager.add_module(CryptModule({}))
+        
         # Import obfuscation should happen AFTER remapping to capture remapped names
         if self.import_obf:
             import_obf_config = {'name_gen': self.name_gen}
             self.module_manager.add_module(ImportObfuscateModule(import_obf_config))
+        
+        # Finally, add runtime anti-tamper guard for builtins
+        if self.anti_tamper_builtins:
+            self.module_manager.add_module(AntiTamperBuiltinsModule({}))
 
     def validate_paths(self):
         """

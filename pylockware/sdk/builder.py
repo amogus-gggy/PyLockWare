@@ -69,20 +69,36 @@ class Builder:
             )
         
         # Проверка anti-debug режима
-        if self.config.anti_debug:
+        # Поддерживаем старый/ручной формат:
+        # - bool: anti_debug=true + anti_debug_mode="..."
+        # - str: anti_debug="native|crossplatform"
+        anti_debug_value = self.config.anti_debug
+        if isinstance(anti_debug_value, bool):
+            anti_debug_enabled = anti_debug_value
+            anti_debug_mode = self.config.anti_debug_mode
+        elif isinstance(anti_debug_value, str):
+            anti_debug_enabled = True
+            anti_debug_mode = anti_debug_value
+        else:
+            anti_debug_enabled = False
+            anti_debug_mode = self.config.anti_debug_mode
+
+        if anti_debug_enabled:
             is_windows_amd64 = (
                 sys.platform == 'win32' and 
                 platform.machine().lower() in ['amd64', 'x86_64']
             )
             
-            if self.config.anti_debug_mode == 'native' and not is_windows_amd64:
+            if anti_debug_mode == 'native' and not is_windows_amd64:
                 print("Warning: Native anti-debug mode is only available for Windows AMD64.")
                 print("         Falling back to cross-platform mode.")
                 self.config.anti_debug = 'crossplatform'
-            elif self.config.anti_debug_mode == 'crossplatform':
+            elif anti_debug_mode == 'crossplatform':
                 self.config.anti_debug = 'crossplatform'
             else:
                 self.config.anti_debug = 'native'
+        else:
+            self.config.anti_debug = None
         
         # Проверка Nuitka совместимости
         if self.config.enable_nuitka and self.config.import_obf:
@@ -131,6 +147,7 @@ class Builder:
             decorator_obf=self.config.decorator_obf,
             call_obf=self.config.call_obf,
             crypt=self.config.crypt,
+            anti_tamper_builtins=self.config.anti_tamper_builtins,
             enable_nuitka=self.config.enable_nuitka,
             nuitka_onefile=self.config.nuitka_onefile,
             nuitka_standalone=self.config.nuitka_standalone,
