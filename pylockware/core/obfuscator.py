@@ -219,9 +219,7 @@ class PyObfuscator:
         if self.disable_traceback:
             from pylockware.modules.disable_traceback_module import DisableTracebackModule
             self.module_manager.add_module(DisableTracebackModule({}))
-        # Add Nuitka module before final cleanup / runtime guards
-        if self.enable_nuitka:
-            self.module_manager.add_module(self.nuitka_module)
+
         
         # Add RemoveAnnotations module to clean up decorators
         self.module_manager.add_module(RemoveAnnotationsModule({}))
@@ -234,10 +232,14 @@ class PyObfuscator:
         if self.import_obf:
             import_obf_config = {'name_gen': self.name_gen}
             self.module_manager.add_module(ImportObfuscateModule(import_obf_config))
-        
+
         # Finally, add runtime anti-tamper guard for builtins
         if self.anti_tamper_builtins:
             self.module_manager.add_module(AntiTamperBuiltinsModule({}))
+
+        # Add Nuitka module before final cleanup / runtime guards
+        if self.enable_nuitka:
+            self.module_manager.add_module(self.nuitka_module)
 
     def validate_paths(self):
         """
