@@ -1,1 +1,58 @@
-Nothing should be ignored in this case, as the changes only include Python source files (.py) which are legitimate code files that should be tracked in version control. No build artifacts, dependencies, or temporary files are present in the change list.
+dist
+__pycache__
+/.vs/
+.vs
+.qwen
+.venv
+antidebug_temp
+/.vs/slnx.sqlite
+/.vs/PyLockWare.slnx/v18/Browse.VC.db-wal
+native_src\PyLockWareRuntime\.vs
+.venv
+nuitka_dist
+/crackme/
+tools
+.kiro
+
+# PyLockWare
+dist/
+*.pyc
+__pycache__/
+
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
