@@ -77,57 +77,28 @@ class AntiTamperBuiltinsModule(ModuleBase):
 
     def _find_insert_line(self, tree: ast.Module) -> int:
         """
-        Find a good insertion point after shebang/encoding and initial imports.
-        Mirrors the behavior of AntiDebugModule for consistency.
+        Find insertion point at the very beginning, preserving only shebang/encoding.
+        Anti-tamper must be injected BEFORE any other code (including imports).
         """
-        last_import_line = 0
-
-        for node in ast.iter_child_nodes(tree):
-            if not isinstance(node, (ast.Import, ast.ImportFrom)):
-                continue
-            end = getattr(node, "end_lineno", node.lineno)
-            if end > last_import_line:
-                last_import_line = end
-
-        # AST line numbers are 1-based, our splitlines index is 0-based
-        return last_import_line
+        # Return 0 to insert at the very beginning
+        # The fallback method will handle shebang/encoding preservation
+        return 0
 
     def _find_insert_line_text_fallback(self, lines) -> int:
         """
-        Fallback insertion point preserving shebang/encoding/__future__ imports.
+        Fallback insertion point preserving only shebang/encoding.
+        Anti-tamper must be injected at the very beginning.
         """
         idx = 0
         total = len(lines)
 
+        # Preserve shebang
         if idx < total and lines[idx].startswith("#!"):
             idx += 1
 
+        # Preserve encoding declaration
         if idx < total and "coding" in lines[idx]:
             idx += 1
-
-        # Skip leading comments/blank lines
-        while idx < total and (not lines[idx].strip() or lines[idx].lstrip().startswith("#")):
-            idx += 1
-
-        # Skip module docstring if present
-        if idx < total and lines[idx].lstrip().startswith(('"""', "'''")):
-            quote = '"""' if '"""' in lines[idx] else "'''"
-            if lines[idx].count(quote) >= 2:
-                idx += 1
-            else:
-                idx += 1
-                while idx < total and quote not in lines[idx]:
-                    idx += 1
-                if idx < total:
-                    idx += 1
-
-        # Keep all __future__ imports first
-        while idx < total:
-            stripped = lines[idx].strip()
-            if stripped.startswith("from __future__ import"):
-                idx += 1
-                continue
-            break
 
         return idx
 
