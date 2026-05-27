@@ -266,6 +266,9 @@ class PyObfuscator:
         if not success:
             return False
 
+        # Apply python-minifier to obfuscator files (builtin_dispatcher, antitamper, antidebug)
+        self._minify_obfuscator_files()
+
         modules = []
         for py_file in self.output_dir.rglob("*.py"):
             if py_file.name != "obfuscator.py":
@@ -275,6 +278,40 @@ class PyObfuscator:
             self.add_banner_to_module(module, banner_text)
 
         return True
+
+    def _minify_obfuscator_files(self):
+        """
+        Apply python-minifier to obfuscator files (builtin_dispatcher, antitamper, antidebug)
+        after all obfuscation is done. Does NOT touch user files.
+        """
+        try:
+            import python_minifier
+            
+            obfuscator_files = [
+                "_builtin_dispatcher.py",
+                "anti_tamper_builtins.py",
+                "antidebug_crossplatform.py",
+                "antidebug_llvm.py",
+            ]
+            
+            for py_file in self.output_dir.rglob("*.py"):
+                if py_file.name in obfuscator_files:
+                    try:
+                        with open(py_file, 'r', encoding='utf-8') as f:
+                            original_code = f.read()
+                        
+                        minified_code = python_minifier.minify(original_code)
+                        
+                        with open(py_file, 'w', encoding='utf-8') as f:
+                            f.write(minified_code)
+                        
+                        print(f"  Minified: {py_file}")
+                    except Exception as e:
+                        print(f"  Warning: Could not minify {py_file}: {e}")
+        except ImportError:
+            print("  Warning: python-minifier not installed, skipping minification of obfuscator files")
+        except Exception as e:
+            print(f"  Warning: Error during minification: {e}")
 
     def add_banner_to_module(self, module_path: Path, banner: str):
         """
