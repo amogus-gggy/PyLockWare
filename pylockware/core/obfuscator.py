@@ -170,10 +170,7 @@ class PyObfuscator:
             }
             self.module_manager.add_module(AntiDebugModule(anti_debug_config))
 
-        # Import obfuscation should happen AFTER remapping to capture remapped names
-        if self.import_obf:
-            import_obf_config = {'name_gen': self.name_gen}
-            self.module_manager.add_module(ImportObfuscateModule(import_obf_config))
+
 
         
 
@@ -230,6 +227,10 @@ class PyObfuscator:
         # Add crypt module if enabled - runs after all other obfuscation
         if self.crypt:
             self.module_manager.add_module(CryptModule({}))
+        # Import obfuscation should happen AFTER remapping to capture remapped names
+        if self.import_obf:
+            import_obf_config = {'name_gen': self.name_gen}
+            self.module_manager.add_module(ImportObfuscateModule(import_obf_config))
 
     def validate_paths(self):
         """
