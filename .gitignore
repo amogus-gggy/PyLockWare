@@ -1,35 +1,58 @@
-```
-# Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
+dist
+__pycache__
+/.vs/
+.vs
+.qwen
+.venv
+antidebug_temp
+/.vs/slnx.sqlite
+/.vs/PyLockWare.slnx/v18/Browse.VC.db-wal
+native_src\PyLockWareRuntime\.vs
+.venv
+nuitka_dist
+/crackme/
+tools
+.kiro
 
-# Build artifacts
-build/
+# PyLockWare
 dist/
-*.egg-info/
+*.pyc
+__pycache__/
 
-# Dependencies
-.venv/
+# Python
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
 venv/
 env/
-.Python
-pip-log.txt
-pip-delete-this-directory.txt
+ENV/
+.venv
 
-# Logs
-*.log
-
-# Environment variables
-.env
-.env.local
-.env.*
-
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-```
+
+# OS
+.DS_Store
+Thumbs.db
