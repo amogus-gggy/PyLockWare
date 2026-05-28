@@ -60,8 +60,8 @@ GetModuleFileNameA.argtypes = [wt.HMODULE, ctypes.c_char_p, wt.DWORD]
 IS_64BIT = platform.machine().endswith('64')
 
 # Toolhelp32
-TH32CS_SNAPTHREAD = 0x00000004
-TH32CS_SNAPMODULE = 0x00000008
+TH32CS_SNAPTHREAD  = 0x00000004
+TH32CS_SNAPMODULE  = 0x00000008
 TH32CS_SNAPMODULE32 = 0x00000010
 
 class THREADENTRY32(ctypes.Structure):
@@ -155,35 +155,18 @@ class CONTEXT_x64(ctypes.Structure):
 CONTEXT_DEBUG_REGISTERS = 0x00000010
 
 
-
-_PySys_WriteStderr = ctypes.pythonapi.PySys_WriteStderr
-_PySys_WriteStderr.argtypes = [ctypes.c_char_p]
-_PySys_WriteStderr.restype = None
-
-
-_PyErr_PrintEx = ctypes.pythonapi.PyErr_PrintEx
-_PyErr_PrintEx.argtypes = [ctypes.c_int]
-_PyErr_PrintEx.restype = None
-
-
 _os_exit = os._exit
 
-@ctypes.CFUNCTYPE(None, ctypes.c_char_p)
-def _native_kill(reason_cstr: bytes) -> None:
-    """Вызывается из JIT-кода при обнаружении отладчика/инжекции."""
-    try:
-        reason = reason_cstr.decode('utf-8', errors='replace')
-    except Exception:
-        reason = str(reason_cstr)
 
-    
-    msg = (
-        f"\n[ANTIDEBUG] VIOLATION DETECTED\n"
-        f"[ANTIDEBUG] Reason: {reason}\n"
-        f"[ANTIDEBUG] Terminating process...\n"
-    )
-    _PySys_WriteStderr(msg.encode('utf-8'))
-    _os_exit(1)
+def _safe_stderr(msg: str) -> None:
+    try:
+        sys.stderr.write(msg)
+        sys.stderr.flush()
+    except Exception:
+        try:
+            os.write(2, msg.encode("utf-8", errors="replace"))
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -196,9 +179,9 @@ class AntiDebugLLVM:
         if not IS_64BIT:
             raise RuntimeError("Only x64 Windows is supported")
 
-        self.module = ir.Module(name="antidebug")
+        self.module  = ir.Module(name="antidebug")
         self.builder = None
-        self.funcs = {}
+        self.funcs   = {}
         self._declare_external_funcs()
         self._build_all_checks()
         self._compile()
@@ -209,81 +192,105 @@ class AntiDebugLLVM:
         i32 = ir.IntType(32)
         i64 = ir.IntType(64)
 
-        
-        ir.Function(self.module, ir.FunctionType(i64, []), name="get_peb_address")
+        # get_peb_address убран — заменён на inline asm GS:[0x60]
 
-        
         ir.Function(self.module, ir.FunctionType(i8p, []), name="GetCurrentProcess")
-
-        
         ir.Function(self.module, ir.FunctionType(i32, []), name="IsDebuggerPresent")
-
-        
         ir.Function(self.module, ir.FunctionType(i32, [i8p, ir.PointerType(i32)]),
                     name="CheckRemoteDebuggerPresent")
-
-        
         ir.Function(self.module, ir.FunctionType(i32, [i8p, i32, i8p, i32, ir.PointerType(i32)]),
                     name="NtQueryInformationProcess")
-
-        
         ir.Function(self.module, ir.FunctionType(i8p, []), name="GetCurrentThread")
-
-        
         ir.Function(self.module, ir.FunctionType(i32, [i8p, i8p]), name="GetThreadContext")
+
+    def _get_peb_inline(self, builder: ir.IRBuilder) -> ir.Value:
+        """
+        Читает адрес PEB через GS:[0x60] без колбэка в Python.
+        Эквивалент: mov rax, gs:[0x60]
+        Никакого Python-колбэка, никакого NtQIP — чистый inline asm.
+        """
+        i64    = ir.IntType(64)
+        asm_ty = ir.FunctionType(i64, [])
+        asm    = ir.InlineAsm(
+            asm_ty,
+            "movq %gs:0x60, $0",
+            "=r",
+            side_effect=False
+        )
+        return builder.call(asm, [], name="peb_int")
 
     def _build_all_checks(self):
         self._build_check_peb()
+        self._build_check_nt_global_flag()
         self._build_check_ntquery()
         self._build_check_hw_bp()
         self._build_check_debugger_present()
-        self._build_check_nt_global_flag()
 
     def _build_check_peb(self):
-        i8p = ir.PointerType(ir.IntType(8))
         i64 = ir.IntType(64)
 
         fnty = ir.FunctionType(i64, [])
         func = ir.Function(self.module, fnty, name="check_peb_debug")
-        block = func.append_basic_block(name="entry")
-        builder = ir.IRBuilder(block)
 
-        get_peb_fn = self.module.globals["get_peb_address"]
-        peb_int = builder.call(get_peb_fn, [], name="peb_int")
+        entry_bb = func.append_basic_block(name="entry")
+        read_bb  = func.append_basic_block(name="read")
+        zero_bb  = func.append_basic_block(name="zero")
 
-        # BeingDebugged @ PEB+0x02  (i8)
-        bd_ptr = builder.inttoptr(
-            builder.add(peb_int, ir.Constant(i64, 0x02)),
+        # entry: получаем PEB через GS:[0x60], проверяем что не 0
+        b       = ir.IRBuilder(entry_bb)
+        peb_int = self._get_peb_inline(b)
+        peb_ok  = b.icmp_unsigned("!=", peb_int, ir.Constant(i64, 0), name="peb_ok")
+        b.cbranch(peb_ok, read_bb, zero_bb)
+
+        # read: BeingDebugged @ PEB+0x02 (i8)
+        b      = ir.IRBuilder(read_bb)
+        bd_ptr = b.inttoptr(
+            b.add(peb_int, ir.Constant(i64, 0x02)),
             ir.PointerType(ir.IntType(8)), name="bd_ptr"
         )
-        bd = builder.load(bd_ptr, name="bd")
-        result = builder.zext(bd, i64, name="result")
-        builder.ret(result)
+        bd     = b.load(bd_ptr, name="bd")
+        result = b.zext(bd, i64, name="result")
+        b.ret(result)
+
+        # zero: PEB == 0, не падаем — возвращаем чисто
+        b = ir.IRBuilder(zero_bb)
+        b.ret(ir.Constant(i64, 0))
+
         self.funcs["check_peb_debug"] = func
 
     def _build_check_nt_global_flag(self):
-        i8p = ir.PointerType(ir.IntType(8))
         i32 = ir.IntType(32)
         i64 = ir.IntType(64)
 
         fnty = ir.FunctionType(i64, [])
         func = ir.Function(self.module, fnty, name="check_nt_global_flag")
-        block = func.append_basic_block(name="entry")
-        builder = ir.IRBuilder(block)
 
-        get_peb_fn = self.module.globals["get_peb_address"]
-        peb_int = builder.call(get_peb_fn, [], name="peb_int")
+        entry_bb = func.append_basic_block(name="entry")
+        read_bb  = func.append_basic_block(name="read")
+        zero_bb  = func.append_basic_block(name="zero")
 
-        # NtGlobalFlag @ PEB+0xBC (i32)
-        ngf_ptr = builder.inttoptr(
-            builder.add(peb_int, ir.Constant(i64, 0xBC)),
+        # entry: получаем PEB, гард на 0
+        b       = ir.IRBuilder(entry_bb)
+        peb_int = self._get_peb_inline(b)
+        peb_ok  = b.icmp_unsigned("!=", peb_int, ir.Constant(i64, 0), name="peb_ok")
+        b.cbranch(peb_ok, read_bb, zero_bb)
+
+        # read: NtGlobalFlag @ PEB+0xBC (i32)
+        b       = ir.IRBuilder(read_bb)
+        ngf_ptr = b.inttoptr(
+            b.add(peb_int, ir.Constant(i64, 0xBC)),
             ir.PointerType(i32), name="ngf_ptr"
         )
-        ngf = builder.load(ngf_ptr, name="ngf")
-        masked = builder.and_(ngf, ir.Constant(i32, 0x70), name="masked")
-        is_set = builder.icmp_unsigned("!=", masked, ir.Constant(i32, 0), name="is_set")
-        result = builder.zext(is_set, i64, name="result")
-        builder.ret(result)
+        ngf    = b.load(ngf_ptr, name="ngf")
+        masked = b.and_(ngf, ir.Constant(i32, 0x70), name="masked")
+        is_set = b.icmp_unsigned("!=", masked, ir.Constant(i32, 0), name="is_set")
+        result = b.zext(is_set, i64, name="result")
+        b.ret(result)
+
+        # zero: PEB == 0
+        b = ir.IRBuilder(zero_bb)
+        b.ret(ir.Constant(i64, 0))
+
         self.funcs["check_nt_global_flag"] = func
 
     def _build_check_ntquery(self):
@@ -304,14 +311,17 @@ class AntiDebugLLVM:
         ntqip_fn = self.module.globals["NtQueryInformationProcess"]
         gcp_fn   = self.module.globals["GetCurrentProcess"]
 
-        # --- entry: query DebugPort ---
-        b = ir.IRBuilder(entry_bb)
-        dp_buf = b.alloca(i64, name="dp_buf")
-        rl_buf = b.alloca(i32, name="rl_buf")
-        hproc  = b.call(gcp_fn, [], name="hproc")
-        st1 = b.call(ntqip_fn, [
+        # ВСЕ alloca только в entry — иначе UB в LLVM (ломает стек-фрейм)
+        b       = ir.IRBuilder(entry_bb)
+        dp_buf  = b.alloca(i64, name="dp_buf")
+        rl_buf  = b.alloca(i32, name="rl_buf")
+        fl_buf  = b.alloca(i32, name="fl_buf")
+        rl2_buf = b.alloca(i32, name="rl2_buf")
+
+        hproc = b.call(gcp_fn, [], name="hproc")
+        st1   = b.call(ntqip_fn, [
             hproc,
-            ir.Constant(i32, 7),
+            ir.Constant(i32, 7),          # ProcessDebugPort
             b.bitcast(dp_buf, i8p),
             ir.Constant(i32, 8),
             rl_buf,
@@ -319,20 +329,18 @@ class AntiDebugLLVM:
         st1_ok = b.icmp_signed("==", st1, ir.Constant(i32, 0))
         b.cbranch(st1_ok, dp_check_bb, flags_bb)
 
-        # --- dp_check: DebugPort != 0 → detected ---
-        b = ir.IRBuilder(dp_check_bb)
+        # dp_check: DebugPort != 0 → detected
+        b      = ir.IRBuilder(dp_check_bb)
         dp_val = b.load(dp_buf, name="dp_val")
         dp_nz  = b.icmp_signed("!=", dp_val, ir.Constant(i64, 0))
         b.cbranch(dp_nz, detected_bb, flags_bb)
 
-        # --- flags: query ProcessDebugFlags ---
-        b = ir.IRBuilder(flags_bb)
-        fl_buf  = b.alloca(i32, name="fl_buf")
-        rl2_buf = b.alloca(i32, name="rl2_buf")
-        hproc2  = b.call(gcp_fn, [], name="hproc2")
-        st2 = b.call(ntqip_fn, [
+        # flags: query ProcessDebugFlags (alloca уже сделана в entry)
+        b      = ir.IRBuilder(flags_bb)
+        hproc2 = b.call(gcp_fn, [], name="hproc2")
+        st2    = b.call(ntqip_fn, [
             hproc2,
-            ir.Constant(i32, 0x1F),
+            ir.Constant(i32, 0x1F),       # ProcessDebugFlags
             b.bitcast(fl_buf, i8p),
             ir.Constant(i32, 4),
             rl2_buf,
@@ -340,17 +348,15 @@ class AntiDebugLLVM:
         st2_ok = b.icmp_signed("==", st2, ir.Constant(i32, 0))
         b.cbranch(st2_ok, flags_eval_bb, detected_bb)
 
-        # --- flags_eval: flags == 0 → detected (no HEAP_NO_DEBUG flag) ---
-        b = ir.IRBuilder(flags_eval_bb)
+        # flags_eval: flags == 0 → detected (нет HEAP_NO_DEBUG флага)
+        b       = ir.IRBuilder(flags_eval_bb)
         fl_val  = b.load(fl_buf, name="fl_val")
         fl_zero = b.icmp_signed("==", fl_val, ir.Constant(i32, 0))
         b.cbranch(fl_zero, detected_bb, clean_bb)
 
-        # --- detected ---
         b = ir.IRBuilder(detected_bb)
         b.ret(ir.Constant(i64, 1))
 
-        # --- clean ---
         b = ir.IRBuilder(clean_bb)
         b.ret(ir.Constant(i64, 0))
 
@@ -399,41 +405,18 @@ class AntiDebugLLVM:
         llvm.initialize_native_asmprinter()
         llvm.initialize_native_asmparser()
 
-        
-        @ctypes.CFUNCTYPE(ctypes.c_uint64)
-        def _get_peb_address_impl():
-            
-            class _PBI(ctypes.Structure):
-                _fields_ = [
-                    ("Reserved1",      ctypes.c_void_p),
-                    ("PebBaseAddress", ctypes.c_uint64),
-                    ("Reserved2",      ctypes.c_uint64 * 2),
-                    ("UniqueProcessId",ctypes.c_uint64),
-                    ("Reserved3",      ctypes.c_void_p),
-                ]
-            pbi = _PBI()
-            rl  = ULONG(0)
-            NtQIP(kernel32.GetCurrentProcess(), 0,
-                  ctypes.byref(pbi), ctypes.sizeof(pbi), ctypes.byref(rl))
-            return pbi.PebBaseAddress
-
-        
-        self._get_peb_address_impl = _get_peb_address_impl
-        fn_ptr = ctypes.cast(_get_peb_address_impl, ctypes.c_void_p).value
-        llvm.add_symbol("get_peb_address", fn_ptr)
-
-        
+        # get_peb_address Python-колбэк убран полностью
         def _reg(name, fn):
             llvm.add_symbol(name, ctypes.cast(fn, ctypes.c_void_p).value)
 
-        _reg("GetCurrentProcess",            kernel32.GetCurrentProcess)
-        _reg("IsDebuggerPresent",            kernel32.IsDebuggerPresent)
-        _reg("CheckRemoteDebuggerPresent",   kernel32.CheckRemoteDebuggerPresent)
-        _reg("NtQueryInformationProcess",    ntdll.NtQueryInformationProcess)
-        _reg("GetCurrentThread",             kernel32.GetCurrentThread)
-        _reg("GetThreadContext",             kernel32.GetThreadContext)
+        _reg("GetCurrentProcess",          kernel32.GetCurrentProcess)
+        _reg("IsDebuggerPresent",          kernel32.IsDebuggerPresent)
+        _reg("CheckRemoteDebuggerPresent", kernel32.CheckRemoteDebuggerPresent)
+        _reg("NtQueryInformationProcess",  ntdll.NtQueryInformationProcess)
+        _reg("GetCurrentThread",           kernel32.GetCurrentThread)
+        _reg("GetThreadContext",           kernel32.GetThreadContext)
 
-        target = llvm.Target.from_default_triple()
+        target         = llvm.Target.from_default_triple()
         target_machine = target.create_target_machine()
 
         llvm_mod = llvm.parse_assembly(str(self.module))
@@ -442,7 +425,6 @@ class AntiDebugLLVM:
         self.engine = llvm.create_mcjit_compiler(llvm_mod, target_machine)
         self.engine.finalize_object()
 
-        
         self.check_peb            = ctypes.CFUNCTYPE(ctypes.c_uint64)(
             self.engine.get_function_address("check_peb_debug"))
         self.check_nt_global_flag = ctypes.CFUNCTYPE(ctypes.c_uint64)(
@@ -455,6 +437,9 @@ class AntiDebugLLVM:
             self.engine.get_function_address("check_debugger_present"))
 
 
+# ---------------------------------------------------------------------------
+# Violation dataclass
+# ---------------------------------------------------------------------------
 
 @dataclass
 class Violation:
@@ -462,6 +447,10 @@ class Violation:
     reason: str
     details: dict = field(default_factory=dict)
 
+
+# ---------------------------------------------------------------------------
+# AntiDebugEngine
+# ---------------------------------------------------------------------------
 
 class AntiDebugEngine:
     """
@@ -485,7 +474,7 @@ class AntiDebugEngine:
         "windbg",
         "cheatengine",
         # Injection frameworks
-        "pyshell",           # de4py
+        "pyshell",
         "reflectivedll",
         "sliver",
         "meterpreter",
@@ -504,36 +493,31 @@ class AntiDebugEngine:
         "debugpy",
     }
 
-    
     MODULE_WHITELIST: Set[str] = set()
 
     def __init__(self, strict: bool = True):
-        self.strict = strict
-        self.llvm = AntiDebugLLVM()
+        self.strict    = strict
+        self.llvm      = AntiDebugLLVM()
         self.violations: List[Violation] = []
         self._baseline_modules: Set[str] = set()
-        self._baseline_tids: Set[int] = set()
+        self._baseline_tids: Set[int]    = set()
         self._lock = threading.Lock()
 
-        # Заполняем baseline модулей при инициализации
         self._capture_baseline()
 
     def _capture_baseline(self):
         """Запоминаем начальный набор модулей и потоков как легитимный."""
         self._baseline_modules = self._enum_modules_toolhelp()
-        self._baseline_tids = self._snapshot_tids()
+        self._baseline_tids    = self._snapshot_tids()
 
-        
         exe_lower = sys.executable.lower()
         if self._is_nuitka_temp_path(exe_lower) or "onefile" in exe_lower:
             self._nuitka_onefile = True
         else:
-            
             self._nuitka_onefile = bool(
                 os.environ.get("NUITKA_ONEFILE_PARENT") or
                 os.environ.get("NUITKA_ONEFILE_BINARY")
             )
-            # Также проверяем: если exe в temp — точно onefile
             if not self._nuitka_onefile:
                 temp = os.environ.get("TEMP", "").lower()
                 if temp and temp in exe_lower:
@@ -545,7 +529,7 @@ class AntiDebugEngine:
 
     def _snapshot_tids(self) -> Set[int]:
         tids: Set[int] = set()
-        pid = os.getpid()
+        pid   = os.getpid()
         hSnap = _CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)
         if hSnap == INVALID_HANDLE_VALUE or hSnap is None:
             return tids
@@ -565,7 +549,7 @@ class AntiDebugEngine:
 
     def _enum_modules_toolhelp(self) -> Set[str]:
         mods: Set[str] = set()
-        pid = os.getpid()
+        pid   = os.getpid()
         hSnap = _CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, pid)
         if hSnap == INVALID_HANDLE_VALUE or hSnap is None:
             return mods
@@ -586,12 +570,12 @@ class AntiDebugEngine:
         return mods
 
     def _enum_modules_pywin32(self) -> Set[str]:
-        """Fallback через pywin32 (точнее, даёт базовые адреса)."""
+        """Fallback через pywin32."""
         mods: Set[str] = set()
         try:
             import win32process
             import win32api
-            pid = os.getpid()
+            pid      = os.getpid()
             hProcess = win32api.OpenProcess(0x0410, False, pid)
             mod_handles = win32process.EnumProcessModulesEx(hProcess, 0x03)
             for hMod in mod_handles:
@@ -615,28 +599,24 @@ class AntiDebugEngine:
         """JIT-проверки нативной отладки через PEB и NtQuery."""
         results = []
 
-        # PEB.BeingDebugged
         if self.llvm.check_peb():
             results.append(Violation(
                 "PEB.BeingDebugged",
                 "Native debugger detected via PEB.BeingDebugged"
             ))
 
-        # PEB.NtGlobalFlag
         if self.llvm.check_nt_global_flag():
             results.append(Violation(
                 "PEB.NtGlobalFlag",
                 "Debug heap flags detected (NtGlobalFlag & 0x70 != 0)"
             ))
 
-        # NtQuery DebugPort / DebugFlags
         if self.llvm.check_ntquery():
             results.append(Violation(
                 "NtQueryInformationProcess",
                 "Non-zero DebugPort or zero ProcessDebugFlags detected"
             ))
 
-        # IsDebuggerPresent / CheckRemoteDebuggerPresent
         if self.llvm.check_dbg_present():
             results.append(Violation(
                 "DebuggerPresent",
@@ -649,7 +629,6 @@ class AntiDebugEngine:
         """Эвристики Python-level отладчиков (модули, потоки)."""
         results = []
 
-        # Проверяем загруженные модули
         current_modules = self._enum_modules_toolhelp() | self._enum_modules_pywin32()
 
         for mod in current_modules:
@@ -662,7 +641,6 @@ class AntiDebugEngine:
                         {"module": mod, "pattern": bad}
                     ))
 
-        # Проверяем Python-потоки
         for t in threading.enumerate():
             if t.name in self.BLACKLIST_THREAD_NAMES:
                 results.append(Violation(
@@ -671,7 +649,6 @@ class AntiDebugEngine:
                     {"thread_name": t.name, "tid": t.ident}
                 ))
 
-        # Проверяем sys.monitoring / sys.gettrace
         if hasattr(sys, 'gettrace') and sys.gettrace() is not None:
             results.append(Violation(
                 "PythonTrace",
@@ -679,7 +656,6 @@ class AntiDebugEngine:
             ))
 
         if hasattr(sys, 'monitoring') and sys.monitoring:
-            # Python 3.12+ PEP 669
             try:
                 if sys.monitoring.get_tool(sys.monitoring.DEBUGGER_ID) is not None:
                     results.append(Violation(
@@ -699,7 +675,6 @@ class AntiDebugEngine:
         new_modules = current_modules - self._baseline_modules
         for mod in new_modules:
             mod_lower = mod.lower()
-            # Любой новый модуль из чёрного списка
             for bad in self.BLACKLIST_DLLS:
                 if bad in mod_lower:
                     results.append(Violation(
@@ -707,12 +682,9 @@ class AntiDebugEngine:
                         f"Injected blacklisted DLL detected: {mod}",
                         {"module": mod, "pattern": bad}
                     ))
-            # Любой новый модуль в нестандартных путях (эвристика)
-            # Пропускаем если это Nuitka onefile — все temp-пути легитимны
             if getattr(self, "_nuitka_onefile", False):
                 continue
             if any(p in mod_lower for p in ["\\temp\\", "\\tmp\\", "\\downloads\\"]):
-                # Исключаем Nuitka onefile: распаковывает в %TEMP%\onefile_<pid>_* и ONEFIL~N
                 if self._is_nuitka_temp_path(mod_lower):
                     continue
                 if not any(w in mod_lower for w in ["python", "vcruntime", "ucrtbase"]):
@@ -726,21 +698,11 @@ class AntiDebugEngine:
 
     @staticmethod
     def _is_nuitka_temp_path(path_lower: str) -> bool:
-        """
-        Возвращает True если путь принадлежит Nuitka onefile temp-директории.
-        Паттерны:
-          - \\temp\\onefile_<pid>_<timestamp>\\...
-          - \\temp\\onefil~N\\...   (8.3 short name)
-          - \\temp\\nuitka_<...>\\...
-        """
         import re
-        # onefile_12345_134220108822537160
         if re.search(r'\\temp\\onefile_\d+_\d+\\', path_lower):
             return True
-        # ONEFIL~N (8.3 alias для onefile_*)
         if re.search(r'\\temp\\onefil~\d+\\', path_lower):
             return True
-        # nuitka_<hash> или nuitka-<hash>
         if re.search(r'\\temp\\nuitka[-_]', path_lower):
             return True
         return False
@@ -749,26 +711,22 @@ class AntiDebugEngine:
         """Обнаружение «стелс»-потоков (manual mapped, StartAddr = None)."""
         results = []
         current_tids = self._snapshot_tids()
-        new_tids = current_tids - self._baseline_tids
-
-        python_tids = {t.ident for t in threading.enumerate() if t.ident}
+        new_tids     = current_tids - self._baseline_tids
+        python_tids  = {t.ident for t in threading.enumerate() if t.ident}
 
         for tid in new_tids:
             if tid in python_tids:
-                continue  # Python-потоки — норма
+                continue
 
-            # Пытаемся получить стартовый адрес
             start_addr = self._get_thread_start_address(tid)
 
             if start_addr is None:
-                # Не удалось прочитать — потенциальный manual mapped thread
                 results.append(Violation(
                     "StealthThread",
                     f"New native thread with unresolvable start address (possible manual map): TID={tid}",
                     {"tid": tid, "start_address": None}
                 ))
             else:
-                # Проверяем, к какому модулю относится адрес
                 mod = self._resolve_module_for_address(start_addr)
                 if mod == "unknown":
                     results.append(Violation(
@@ -777,7 +735,6 @@ class AntiDebugEngine:
                         {"tid": tid, "start_address": hex(start_addr), "module": mod}
                     ))
 
-        # Обновляем baseline
         self._baseline_tids = current_tids
         return results
 
@@ -790,7 +747,8 @@ class AntiDebugEngine:
             if hw.get("any_set"):
                 results.append(Violation(
                     "HardwareBreakpoint",
-                    f"Hardware breakpoint detected on TID={tid}: DR0={hw['dr0']} DR1={hw['dr1']} DR2={hw['dr2']} DR3={hw['dr3']}",
+                    f"Hardware breakpoint detected on TID={tid}: "
+                    f"DR0={hw['dr0']} DR1={hw['dr1']} DR2={hw['dr2']} DR3={hw['dr3']}",
                     {"tid": tid, **{f"dr{i}": hw[f"dr{i}"] for i in range(4)}}
                 ))
 
@@ -806,7 +764,7 @@ class AntiDebugEngine:
             return None
         try:
             start_addr = ULONG_PTR(0)
-            ret_len = ULONG(0)
+            ret_len    = ULONG(0)
             status = NtQIT(
                 hThread, 9,
                 ctypes.byref(start_addr),
@@ -828,7 +786,7 @@ class AntiDebugEngine:
                 alloc_base = mbi.AllocationBase
                 if alloc_base:
                     buf = ctypes.create_string_buffer(512)
-                    n = GetModuleFileNameA(alloc_base, buf, 512)
+                    n   = GetModuleFileNameA(alloc_base, buf, 512)
                     if n > 0:
                         return buf.value.decode("utf-8", errors="replace")
         except Exception:
@@ -852,12 +810,12 @@ class AntiDebugEngine:
             ctx = CONTEXT_x64()
             ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS
             if GetThreadContext(hThread, ctypes.byref(ctx)):
-                result["dr0"] = ctx.Dr0
-                result["dr1"] = ctx.Dr1
-                result["dr2"] = ctx.Dr2
-                result["dr3"] = ctx.Dr3
-                result["dr6"] = ctx.Dr6
-                result["dr7"] = ctx.Dr7
+                result["dr0"]     = ctx.Dr0
+                result["dr1"]     = ctx.Dr1
+                result["dr2"]     = ctx.Dr2
+                result["dr3"]     = ctx.Dr3
+                result["dr6"]     = ctx.Dr6
+                result["dr7"]     = ctx.Dr7
                 result["any_set"] = bool(ctx.Dr0 or ctx.Dr1 or ctx.Dr2 or ctx.Dr3)
             else:
                 result["error"] = f"GetThreadContext failed: {ctypes.GetLastError()}"
@@ -915,7 +873,6 @@ class AntiDebugEngine:
             return
 
         with self._lock:
-            # Формируем подробный отчёт
             lines = [
                 "",
                 "=" * 70,
@@ -939,14 +896,10 @@ class AntiDebugEngine:
 
             report = "\n".join(lines) + "\n"
 
-            # Печатаем через PySys_WriteStderr для надёжности (даже если stdout перехвачен)
-            _PySys_WriteStderr(report.encode('utf-8'))
+            _safe_stderr(report)
 
-            # Небольшая задержка чтобы stderr успел сброситься
             time.sleep(0.1)
-
-            # Жёсткий выход — не даём отладчику перехватить SystemExit
-            os._exit(1)
+            _os_exit(1)
 
     def start_monitoring(self, interval_ms: float = 500):
         """Запускает фоновый мониторинг в отдельном потоке."""
@@ -992,7 +945,6 @@ def monitor(interval_ms: float = 500):
 
 if __name__ == "__main__":
     print("[PyLockWare AntiDebug] Running self-test...")
-    import os
     print(os.getpid())
     engine = init(strict=True)
 

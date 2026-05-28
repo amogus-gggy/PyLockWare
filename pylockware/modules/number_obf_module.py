@@ -38,7 +38,7 @@ class NumberObfModule(ModuleBase):
             # Find all Python files in the output directory
             for py_file in output_path.rglob("*.py"):
                 # Skip anti-debug modules and the obfuscator script itself
-                if py_file.name not in ["anti_debug_injector.py", "anti_debug_injector_normal.py", "obfuscator.py", "num_obf.py"]:
+                if py_file.name not in ["anti_debug_injector.py", "anti_debug_injector_normal.py", "obfuscator.py", "num_obf.py", "antidebug_llvm.py"]:
                     try:
                         with open(py_file, 'r', encoding='utf-8') as f:
                             original_code = f.read()

@@ -44,7 +44,7 @@ class JunkCodeModule(ModuleBase):
             # Find all Python files in the output directory
             for py_file in output_path.rglob("*.py"):
                 # Skip special files
-                if py_file.name not in ["obfuscator.py", "junk_code_transformer.py"]:
+                if py_file.name not in ["obfuscator.py", "junk_code_transformer.py", "antidebug_llvm.py"]:
                     try:
                         with open(py_file, 'r', encoding='utf-8') as f:
                             original_code = f.read()
