@@ -9,6 +9,7 @@ _GUARD_MARKER = "# __pylockware_anti_tamper_builtins__"
 _MODULE_NAME = "anti_tamper_builtins"
 _SKIP_FILES = {
     f"{_MODULE_NAME}.py",
+    "_builtin_dispatcher.py",
     "antidebug_crossplatform.py",
     "antidebug_llvm.py",
 }
