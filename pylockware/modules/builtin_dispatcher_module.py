@@ -109,8 +109,16 @@ class BuiltinDispatcherModule(ModuleBase):
             # Process all Python files (except the dispatcher files themselves)
             files_modified = 0
             
+            # Files that should NOT be transformed (they contain critical runtime checks)
+            protected_files = {
+                DISPATCHER_FILENAME,
+                "antidebug_llvm.py",
+                "antidebug_crossplatform.py",
+                "anti_tamper_builtins.py",
+            }
+
             for py_file in py_files:
-                if py_file.name in (DISPATCHER_FILENAME, "antidebug_llvm.py"):
+                if py_file.name in protected_files:
                     continue
                 try:
                     with open(py_file, 'r', encoding='utf-8') as f:
