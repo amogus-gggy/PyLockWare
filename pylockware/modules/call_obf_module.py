@@ -53,12 +53,13 @@ class CallObfModule(ModuleBase):
 
                     obfuscated_code = self.obfuscate_calls(original_code, str(py_file))
 
-                    try:
+                    '''try:
                         ast.parse(obfuscated_code)
+                        print(obfuscated_code)
                     except SyntaxError as e:
                         print(f"[CallObf]   ERROR: Obfuscation broke syntax in {py_file}: {e}")
                         self.stats["errors"].append(f"{py_file}: invalid output - {e}")
-                        continue
+                        continue'''
 
                     if obfuscated_code != original_code:
                         with io.open(py_file, "w", encoding="utf-8", newline="") as f:

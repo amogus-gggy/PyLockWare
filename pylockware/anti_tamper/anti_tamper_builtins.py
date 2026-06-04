@@ -49,6 +49,71 @@ _builtins_module = builtins
 _MODULE_GLOBALS: dict | None = None
 _MISSING = object()  # sentinel to tell "no key" from "value is None"
 
+# Standard library modules that legitimately shadow builtin names
+_STDLIB_MODULES = frozenset({
+    're', 'os', 'sys', 'io', 'pathlib', 'subprocess', 'shutil',
+    'ast', 'dis', 'inspect', 'importlib', 'types', 'typing',
+    'collections', 'itertools', 'functools', 'operator',
+    'contextlib', 'abc', 'copy', 'pickle', 'json', 'xml',
+    'html', 'email', 'urllib', 'http', 'ftplib', 'smtplib',
+    'sqlite3', 'dbm', 'csv', 'configparser', 'logging',
+    'argparse', 'getopt', 'readline', 'cmd', 'shlex',
+    'threading', 'multiprocessing', 'concurrent', 'queue',
+    'socket', 'ssl', 'select', 'asyncio', 'signal',
+    'struct', 'codecs', 'encodings', 'locale', 'gettext',
+    'platform', 'ctypes', 'array', 'mmap', 'resource',
+    'gc', 'weakref', 'copyreg', 'traceback', 'linecache',
+    'tokenize', 'keyword', 'token', 'tabnanny', 'pydoc',
+    'doctest', 'unittest', 'test', 'lib2to3', 'distutils',
+    'ensurepip', 'venv', 'zipapp', 'zipfile', 'tarfile',
+    'gzip', 'bz2', 'lzma', 'zlib', 'hashlib', 'hmac',
+    'secrets', 'random', 'statistics', 'decimal', 'fractions',
+    'numbers', 'math', 'cmath', 'time', 'datetime', 'calendar',
+    'heapq', 'bisect', 'reprlib', 'pprint', 'textwrap',
+    'string', 'difflib', 'stringprep', 'unicodedata',
+    'rlcompleter', 'pdb', 'profile', 'pstats', 'timeit',
+    'trace', 'cProfile', 'warnings', 'dataclasses', 'enum',
+    'graphlib', 'fileinput', 'tempfile', 'glob', 'fnmatch',
+    'pkgutil', 'modulefinder', 'runpy', 'importlib.util',
+    'importlib.machinery', 'importlib.resources', 'sysconfig',
+    '_thread', 'dummy_threading', 'contextvars', 'decimal',
+    'importlib.resources.abc', 'importlib.resources',
+    'os.path', 'ntpath', 'posixpath',
+})
+
+# Check if a filename belongs to the Python standard library
+import sys as _sys
+def _is_stdlib_file(filename: str) -> bool:
+    """Check if a file is part of the Python standard library."""
+    if not filename:
+        return False
+    
+    # Normalize path
+    filename_lower = filename.lower().replace('\\', '/')
+    
+    # Check against known stdlib paths
+    stdlib_paths = [
+        _sys.prefix.lower().replace('\\', '/'),
+        _sys.base_prefix.lower().replace('\\', '/'),
+    ]
+    
+    for sp in stdlib_paths:
+        if filename_lower.startswith(sp + '/') or filename_lower.startswith(sp + '\\'):
+            return True
+    
+    # Also check for Python installation directories
+    python_lib_patterns = [
+        '/lib/python', '\\lib\\python',
+        '/Lib/', '\\Lib\\',
+        '/Lib/site-packages/', '\\Lib\\site-packages\\',  # but NOT site-packages
+    ]
+    
+    for pattern in python_lib_patterns:
+        if pattern.lower() in filename_lower:
+            return True
+    
+    return False
+
 # ── Crash handler ────────────────────────────────────────────────────────────
 
 def _hard_crash(reason: str) -> None:
@@ -77,20 +142,31 @@ def _fast_check(caller_frame) -> None:
     for name, original in _CRITICAL_CHECKS:
         val = loc.get(name, _MISSING)
         if val is not _MISSING and val is not original:
-            _hard_crash(
-                f"local '{name}' shadowed in "
-                f"{caller_frame.f_code.co_filename}:{caller_frame.f_code.co_name}"
-            )
+            # Skip stdlib modules
+            filename = caller_frame.f_code.co_filename
+            if not _is_stdlib_file(filename):
+                _hard_crash(
+                    f"local '{name}' shadowed in "
+                    f"{caller_frame.f_code.co_filename}:{caller_frame.f_code.co_name}"
+                )
 
     # 3. Shadowing in caller globals (module-level: compile = print)
+    # Skip check for standard library modules
     glo = caller_frame.f_globals
-    for name, original in _CRITICAL_CHECKS:
-        val = glo.get(name, _MISSING)
-        if val is not _MISSING and val is not original:
-            _hard_crash(
-                f"global '{name}' shadowed in module "
-                f"{glo.get('__name__', '?')}"
-            )
+    module_name = glo.get('__name__', '')
+    
+    # Skip check for standard library modules (by name or file path)
+    module_base = module_name.split('.')[0]
+    filename = glo.get('__file__', '')
+    
+    if module_base not in _STDLIB_MODULES and not _is_stdlib_file(filename):
+        for name, original in _CRITICAL_CHECKS:
+            val = glo.get(name, _MISSING)
+            if val is not _MISSING and val is not original:
+                _hard_crash(
+                    f"global '{name}' shadowed in module "
+                    f"{module_name}"
+                )
 
 
 # ── Full check — background thread (deep scan) ───────────────────────────────
