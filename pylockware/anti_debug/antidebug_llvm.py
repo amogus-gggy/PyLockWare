@@ -346,7 +346,11 @@ class AntiDebugLLVM:
             rl2_buf,
         ], name="st2")
         st2_ok = b.icmp_signed("==", st2, ir.Constant(i32, 0))
-        b.cbranch(st2_ok, flags_eval_bb, detected_bb)
+        # ИСПРАВЛЕНИЕ: на современных Windows 10/11 ProcessDebugFlags (0x1F)
+        # часто возвращает STATUS_INVALID_INFO_CLASS. Раньше любая ошибка
+        # трактовалась как detected. Теперь ошибка = проверка недоступна,
+        # считаем процесс чистым (clean_bb).
+        b.cbranch(st2_ok, flags_eval_bb, clean_bb)
 
         # flags_eval: flags == 0 → detected (нет HEAP_NO_DEBUG флага)
         b       = ir.IRBuilder(flags_eval_bb)
@@ -720,20 +724,21 @@ class AntiDebugEngine:
 
             start_addr = self._get_thread_start_address(tid)
 
+            # ИСПРАВЛЕНИЕ: start_addr == None часто возвращается для
+            # легитимных системных/CRT/Python runtime потоков (особенно
+            # thread-pool и фоновых worker'ов). Не считаем это автоматически
+            # нарушением — только если адрес разрешился, но лежит вне
+            # известных модулей (unknown module).
             if start_addr is None:
+                continue
+
+            mod = self._resolve_module_for_address(start_addr)
+            if mod == "unknown":
                 results.append(Violation(
                     "StealthThread",
-                    f"New native thread with unresolvable start address (possible manual map): TID={tid}",
-                    {"tid": tid, "start_address": None}
+                    f"New native thread from unknown module: TID={tid}, addr={start_addr}",
+                    {"tid": tid, "start_address": hex(start_addr), "module": mod}
                 ))
-            else:
-                mod = self._resolve_module_for_address(start_addr)
-                if mod == "unknown":
-                    results.append(Violation(
-                        "StealthThread",
-                        f"New native thread from unknown module: TID={tid}, addr={start_addr}",
-                        {"tid": tid, "start_address": hex(start_addr), "module": mod}
-                    ))
 
         self._baseline_tids = current_tids
         return results
