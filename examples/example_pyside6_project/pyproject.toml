@@ -7,17 +7,17 @@ entry_function = "main"
 output_dir = "dist"
 
 # Obfuscation Options
-remap = false
-string_prot = false
-num_obf = false
+remap = true
+string_prot = true
+num_obf = true
 import_obf = false
-state_machine = false
-builtin_dispatcher = false
+state_machine = true
+builtin_dispatcher = true
 junk_code = true
-decorator_obf = false
-call_obf = false
-disable_traceback = false
-crypt = false
+decorator_obf = true
+call_obf = true
+disable_traceback = true
+crypt = true
 anti_tamper_builtins = false
 # Obfuscation Parameters
 junk_density = 1.0

@@ -5,7 +5,7 @@ Now with anti-dump string poisoning and maximum visual annoyance.
 """
 import ast
 import random
-from pylockware.core.name_generator import generate_random_name
+from pylockware.core.name_generator import generate_random_name, NameGenerator
 
 import random
 import string
@@ -55,9 +55,11 @@ class JunkCodeTransformer(ast.NodeTransformer):
         self.junk_density = junk_density
         self.opaque_complexity = opaque_complexity
         self.var_counter = 0
+        # Cache the NameGenerator so we don't rebuild the char set on every call
+        self._name_generator = NameGenerator(name_gen_settings)
 
     def _rand_name(self, prefix=""):
-        return generate_random_name(prefix, self.name_gen_settings)
+        return self._name_generator.generate_name(prefix)
 
     def _anti_dump_string(self):
         return random.choice(self.ANTI_DUMP_STRINGS)
@@ -523,6 +525,272 @@ class JunkCodeTransformer(ast.NodeTransformer):
         return [self._generate_junk_statement() for _ in range(random.randint(lo, hi))]
 
     # ------------------------------------------------------------------
+    # Poison variable system — semantically entangled fake variables.
+    # Removing any variable from the chain causes NameError at runtime.
+    # ------------------------------------------------------------------
+
+    def _make_int_node(self, val):
+        return ast.Constant(value=val)
+
+    def _make_str_node(self, val):
+        return ast.Constant(value=val)
+
+    def _make_bool_node(self, val):
+        return ast.Constant(value=val)
+
+    def _generate_poison_var_block(self):
+        """
+        Generate a self-referential chain of poison variables:
+          v0 = <literal>
+          v1 = <expr using v0>
+          v2 = <expr using v1>
+          ...
+        All variables are dead (never read by real code), but removing any one
+        breaks the chain and produces NameError / wrong value in guards.
+        Returns (stmts: list[ast.stmt], names: list[str])
+        """
+        stmts = []
+        names = []
+
+        # Root variable — always a literal so the chain starts clean
+        root_name = self._rand_name()
+        names.append(root_name)
+        root_kind = random.choice(['int', 'str', 'bool', 'list', 'float'])
+
+        if root_kind == 'int':
+            root_val = random.randint(1, 0x7FFF)
+            root_node = self._make_int_node(root_val)
+        elif root_kind == 'str':
+            root_val = self._anti_dump_string()
+            root_node = self._make_str_node(root_val)
+        elif root_kind == 'bool':
+            root_val = random.choice([True, False])
+            root_node = self._make_bool_node(root_val)
+        elif root_kind == 'float':
+            root_val = round(random.uniform(0.1, 999.9), 4)
+            root_node = ast.Constant(value=root_val)
+        else:  # list
+            elts = [ast.Constant(value=random.randint(0, 255)) for _ in range(random.randint(2, 5))]
+            root_node = ast.List(elts=elts, ctx=ast.Load())
+            root_val = None  # sentinel
+
+        stmts.append(ast.Assign(
+            targets=[ast.Name(id=root_name, ctx=ast.Store())],
+            value=root_node
+        ))
+
+        # Chain — each variable references the previous one.
+        # All operations are type-agnostic (work on any Python value).
+        chain_len = random.randint(2, 5)
+        for i in range(chain_len):
+            prev_name = names[-1]
+            new_name = self._rand_name()
+            names.append(new_name)
+
+            kind = random.choice([
+                'str_concat', 'bool_not', 'len_wrap',
+                'list_wrap', 'str_repr', 'type_check', 'id_hash',
+                'ternary_self', 'tuple_wrap', 'id_and',
+            ])
+
+            prev_load = ast.Name(id=prev_name, ctx=ast.Load())
+
+            if kind == 'str_concat':
+                # new = str(prev) + ""   — always a str, type-safe
+                value = ast.BinOp(
+                    left=ast.Call(func=ast.Name(id='str', ctx=ast.Load()),
+                                  args=[prev_load], keywords=[]),
+                    op=ast.Add(),
+                    right=ast.Constant(value="")
+                )
+            elif kind == 'bool_not':
+                # new = not not prev   — always bool, type-safe
+                value = ast.UnaryOp(
+                    op=ast.Not(),
+                    operand=ast.UnaryOp(op=ast.Not(), operand=prev_load)
+                )
+            elif kind == 'len_wrap':
+                # new = len(str(prev))   — always int, type-safe
+                value = ast.Call(
+                    func=ast.Name(id='len', ctx=ast.Load()),
+                    args=[ast.Call(func=ast.Name(id='str', ctx=ast.Load()),
+                                   args=[prev_load], keywords=[])],
+                    keywords=[]
+                )
+            elif kind == 'list_wrap':
+                # new = [prev]   — always list
+                value = ast.List(elts=[prev_load], ctx=ast.Load())
+            elif kind == 'str_repr':
+                # new = repr(prev)   — always str
+                value = ast.Call(func=ast.Name(id='repr', ctx=ast.Load()),
+                                 args=[prev_load], keywords=[])
+            elif kind == 'type_check':
+                # new = type(prev).__name__   — always str
+                value = ast.Attribute(
+                    value=ast.Call(func=ast.Name(id='type', ctx=ast.Load()),
+                                   args=[prev_load], keywords=[]),
+                    attr='__name__', ctx=ast.Load()
+                )
+            elif kind == 'id_hash':
+                # new = id(prev) & 0xFFFF   — id() always returns int, safe
+                value = ast.BinOp(
+                    left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
+                                  args=[prev_load], keywords=[]),
+                    op=ast.BitAnd(),
+                    right=ast.Constant(0xFFFF)
+                )
+            elif kind == 'id_and':
+                # new = id(prev) ^ id(prev)   — always 0, int, safe
+                value = ast.BinOp(
+                    left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
+                                  args=[prev_load], keywords=[]),
+                    op=ast.BitXor(),
+                    right=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
+                                   args=[ast.Name(id=prev_name, ctx=ast.Load())], keywords=[])
+                )
+            elif kind == 'ternary_self':
+                # new = prev if True else prev   — always == prev, no truthiness eval
+                value = ast.IfExp(
+                    test=ast.Constant(True),
+                    body=prev_load,
+                    orelse=ast.Name(id=prev_name, ctx=ast.Load())
+                )
+            else:  # tuple_wrap
+                # new = (prev,)[0]   — type-safe subscript of a 1-tuple
+                value = ast.Subscript(
+                    value=ast.Tuple(elts=[prev_load], ctx=ast.Load()),
+                    slice=ast.Constant(0),
+                    ctx=ast.Load()
+                )
+
+            stmts.append(ast.Assign(
+                targets=[ast.Name(id=new_name, ctx=ast.Store())],
+                value=value
+            ))
+
+        return stmts, names
+
+    def _generate_poison_guard(self, poison_names):
+        """
+        Build an `if` that always evaluates to True and references poison_names,
+        so removing them raises NameError.
+        The guard body contains more junk referencing those same variables.
+        """
+        if not poison_names:
+            return self._generate_junk_compound()
+
+        # Pick 1-3 names to use in the condition
+        used = random.sample(poison_names, min(random.randint(1, 3), len(poison_names)))
+
+        def _ref(name):
+            return ast.Name(id=name, ctx=ast.Load())
+
+        # Build always-true conditions that *reference* the poison vars
+        cond_kind = random.choice([
+            'id_eq', 'type_is_type', 'bool_or_true', 'str_not_empty_or_true',
+            'and_chain', 'len_ge_zero', 'id_gt_zero',
+        ])
+
+        if cond_kind == 'id_eq':
+            # id(v) == id(v) — always true, references v twice
+            v = _ref(used[0])
+            test = ast.Compare(
+                left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()), args=[v], keywords=[]),
+                ops=[ast.Eq()],
+                comparators=[ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
+                                      args=[_ref(used[0])], keywords=[])]
+            )
+
+        elif cond_kind == 'type_is_type':
+            # type(v) is type(v) — always true
+            v = _ref(used[0])
+            test = ast.Compare(
+                left=ast.Call(func=ast.Name(id='type', ctx=ast.Load()), args=[v], keywords=[]),
+                ops=[ast.Is()],
+                comparators=[ast.Call(func=ast.Name(id='type', ctx=ast.Load()),
+                                      args=[_ref(used[0])], keywords=[])]
+            )
+
+        elif cond_kind == 'bool_or_true':
+            # bool(v) or True — always true (but evaluates v)
+            test = ast.BoolOp(
+                op=ast.Or(),
+                values=[
+                    ast.Call(func=ast.Name(id='bool', ctx=ast.Load()),
+                             args=[_ref(used[0])], keywords=[]),
+                    ast.Constant(True)
+                ]
+            )
+
+        elif cond_kind == 'str_not_empty_or_true':
+            # str(v) is not None — always true
+            test = ast.Compare(
+                left=ast.Call(func=ast.Name(id='str', ctx=ast.Load()),
+                              args=[_ref(used[0])], keywords=[]),
+                ops=[ast.IsNot()],
+                comparators=[ast.Constant(None)]
+            )
+
+        elif cond_kind == 'and_chain' and len(used) >= 2:
+            # id(a) >= 0 and id(b) >= 0 — always true
+            parts = [
+                ast.Compare(
+                    left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
+                                  args=[_ref(n)], keywords=[]),
+                    ops=[ast.GtE()],
+                    comparators=[ast.Constant(0)]
+                )
+                for n in used[:2]
+            ]
+            test = ast.BoolOp(op=ast.And(), values=parts)
+
+        elif cond_kind == 'len_ge_zero':
+            # len(str(v)) >= 0 — always true
+            test = ast.Compare(
+                left=ast.Call(
+                    func=ast.Name(id='len', ctx=ast.Load()),
+                    args=[ast.Call(func=ast.Name(id='str', ctx=ast.Load()),
+                                   args=[_ref(used[0])], keywords=[])],
+                    keywords=[]
+                ),
+                ops=[ast.GtE()],
+                comparators=[ast.Constant(0)]
+            )
+
+        elif cond_kind == 'id_gt_zero':
+            # id(v) > 0 — always true on CPython
+            test = ast.Compare(
+                left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
+                              args=[_ref(used[0])], keywords=[]),
+                ops=[ast.Gt()],
+                comparators=[ast.Constant(0)]
+            )
+
+        else:
+            # fallback: id(v) >= 0
+            test = ast.Compare(
+                left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
+                              args=[_ref(used[0])], keywords=[]),
+                ops=[ast.GtE()],
+                comparators=[ast.Constant(0)]
+            )
+
+        # Body of the guard: reference the vars again + some extra junk
+        body = []
+        for name in used:
+            body.append(ast.Assign(
+                targets=[ast.Name(id=self._rand_name(), ctx=ast.Store())],
+                value=ast.Call(
+                    func=ast.Name(id='str', ctx=ast.Load()),
+                    args=[ast.Name(id=name, ctx=ast.Load())],
+                    keywords=[]
+                )
+            ))
+        body.extend(self._generate_junk_block(random.randint(1, 3)))
+
+        return ast.If(test=test, body=body, orelse=[])
+
+    # ------------------------------------------------------------------
     # Deeply nested junk for maximum visual annoyance
     # ------------------------------------------------------------------
     def _generate_nested_if_chain(self, depth=0, max_depth=4):
@@ -782,15 +1050,40 @@ class JunkCodeTransformer(ast.NodeTransformer):
     def _insert_junk_around_statements(self, body):
         new_body = []
         for stmt in body:
+            # --- Before each real statement: optionally a classic junk compound ---
             if random.random() < 0.6:
                 new_body.append(self._generate_junk_compound())
+
+            # --- Poison variable block + guard (nearly always, creates hard dependency) ---
+            if random.random() < 0.9:
+                poison_stmts, poison_names = self._generate_poison_var_block()
+                new_body.extend(poison_stmts)
+                # 1-3 guards referencing the poison vars
+                for _ in range(random.randint(1, 3)):
+                    new_body.append(self._generate_poison_guard(poison_names))
+
+            # --- The actual real statement ---
             new_body.append(stmt)
+
+            # --- After each real statement: optional junk compound + poison ---
             if random.random() < 0.4:
                 new_body.append(self._generate_junk_compound())
+
+            if random.random() < 0.7:
+                poison_stmts2, poison_names2 = self._generate_poison_var_block()
+                new_body.extend(poison_stmts2)
+                new_body.append(self._generate_poison_guard(poison_names2))
+
             if random.random() < 0.15:
                 new_body.append(self._generate_fake_docstring())
+
+        # Trailing junk
         if random.random() < 0.5:
             new_body.append(self._generate_junk_compound())
+        if random.random() < 0.8:
+            poison_stmts3, poison_names3 = self._generate_poison_var_block()
+            new_body.extend(poison_stmts3)
+            new_body.append(self._generate_poison_guard(poison_names3))
         if random.random() < 0.2:
             new_body.append(self._generate_fake_docstring())
         return new_body
@@ -840,16 +1133,32 @@ class JunkCodeTransformer(ast.NodeTransformer):
         for _ in range(random.randint(2, 5)):
             new_body.append(self._generate_junk_statement())
             new_body.append(self._generate_junk_compound())
+            poison_stmts, poison_names = self._generate_poison_var_block()
+            new_body.extend(poison_stmts)
+            new_body.append(self._generate_poison_guard(poison_names))
 
         for stmt in node.body:
+            # poison block before each module-level statement
+            if random.random() < 0.85:
+                poison_stmts, poison_names = self._generate_poison_var_block()
+                new_body.extend(poison_stmts)
+                for _ in range(random.randint(1, 2)):
+                    new_body.append(self._generate_poison_guard(poison_names))
             new_body.append(stmt)
             if random.random() < 0.3:
                 new_body.append(self._generate_junk_compound())
+            if random.random() < 0.5:
+                poison_stmts2, poison_names2 = self._generate_poison_var_block()
+                new_body.extend(poison_stmts2)
+                new_body.append(self._generate_poison_guard(poison_names2))
             if random.random() < 0.1:
                 new_body.append(self._generate_fake_docstring())
 
         for _ in range(random.randint(1, 3)):
             new_body.append(self._generate_junk_compound())
+            poison_stmts3, poison_names3 = self._generate_poison_var_block()
+            new_body.extend(poison_stmts3)
+            new_body.append(self._generate_poison_guard(poison_names3))
 
         node.body = new_body
         return self.generic_visit(node)
