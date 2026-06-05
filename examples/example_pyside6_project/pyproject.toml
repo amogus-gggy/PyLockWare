@@ -7,22 +7,22 @@ entry_function = "main"
 output_dir = "dist"
 
 # Obfuscation Options
-remap = true
-string_prot = true
-num_obf = true
+remap = false
+string_prot = false
+num_obf = false
 import_obf = false
-state_machine = true
-builtin_dispatcher = true
+state_machine = false
+builtin_dispatcher = false
 junk_code = true
-decorator_obf = true
-call_obf = true
-disable_traceback = true
-crypt = true
+decorator_obf = false
+call_obf = false
+disable_traceback = false
+crypt = false
 anti_tamper_builtins = false
 # Obfuscation Parameters
 junk_density = 1.0
 opaque_complexity = "high"
-name_gen = "chinese"
+name_gen = "english"
 banner = "Obfuscated by PyLockWare"
 
 # Anti-Debug (leave commented to disable)
