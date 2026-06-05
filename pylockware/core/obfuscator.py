@@ -27,6 +27,7 @@ from pylockware.modules.type_annotation_obf_module import TypeAnnotationObfModul
 from pylockware.modules.call_obf_module import CallObfModule
 from pylockware.modules.remove_annotations_module import RemoveAnnotationsModule
 from pylockware.modules.crypt_module import CryptModule
+from pylockware.modules.anti_tamper_builtins_module import AntiTamperBuiltinsModule
 
 
 class PyObfuscator:
@@ -47,7 +48,7 @@ class PyObfuscator:
                  nuitka_admin: bool = False, nuitka_plugins: List[str] = None, nuitka_extra_imports: List[str] = None,
                  nuitka_options: List[str] = None, disable_traceback: bool = False,
                  decorator_obf: bool = False, type_annotation_obf: bool = False, call_obf: bool = False,
-                 crypt: bool = False):
+                 crypt: bool = False, anti_tamper_builtins: bool = True):
         self.project_path = Path(project_path)
         self.entry_point = Path(entry_point)
         self.entry_function = entry_function
@@ -69,6 +70,7 @@ class PyObfuscator:
         self.type_annotation_obf = type_annotation_obf  # Enable type annotation obfuscation
         self.call_obf = call_obf  # Enable call obfuscation using getattr pattern
         self.crypt = crypt  # Enable function encryption using machine fingerprinting
+        self.anti_tamper_builtins = anti_tamper_builtins  # Enable runtime anti-tamper guard for builtins
 
         # Nuitka options
         self.enable_nuitka = enable_nuitka
@@ -170,10 +172,7 @@ class PyObfuscator:
             }
             self.module_manager.add_module(AntiDebugModule(anti_debug_config))
 
-        # Import obfuscation should happen AFTER remapping to capture remapped names
-        if self.import_obf:
-            import_obf_config = {'name_gen': self.name_gen}
-            self.module_manager.add_module(ImportObfuscateModule(import_obf_config))
+
 
         
 
@@ -220,16 +219,27 @@ class PyObfuscator:
         if self.disable_traceback:
             from pylockware.modules.disable_traceback_module import DisableTracebackModule
             self.module_manager.add_module(DisableTracebackModule({}))
-        # Add Nuitka module LAST so it runs after all obfuscation
-        if self.enable_nuitka:
-            self.module_manager.add_module(self.nuitka_module)
-        
-        # Add RemoveAnnotations module ABSOLUTELY LAST to clean up decorators
-        self.module_manager.add_module(RemoveAnnotationsModule({}))
 
+        
+        # Add RemoveAnnotations module to clean up decorators
+        self.module_manager.add_module(RemoveAnnotationsModule({}))
+        
         # Add crypt module if enabled - runs after all other obfuscation
         if self.crypt:
             self.module_manager.add_module(CryptModule({}))
+        
+        # Import obfuscation should happen AFTER remapping to capture remapped names
+        if self.import_obf:
+            import_obf_config = {'name_gen': self.name_gen}
+            self.module_manager.add_module(ImportObfuscateModule(import_obf_config))
+
+        # Finally, add runtime anti-tamper guard for builtins
+        if self.anti_tamper_builtins:
+            self.module_manager.add_module(AntiTamperBuiltinsModule({}))
+
+        # Add Nuitka module before final cleanup / runtime guards
+        if self.enable_nuitka:
+            self.module_manager.add_module(self.nuitka_module)
 
     def validate_paths(self):
         """
@@ -256,6 +266,9 @@ class PyObfuscator:
         if not success:
             return False
 
+        # Apply python-minifier to obfuscator files (builtin_dispatcher, antitamper, antidebug)
+        self._minify_obfuscator_files()
+
         modules = []
         for py_file in self.output_dir.rglob("*.py"):
             if py_file.name != "obfuscator.py":
@@ -265,6 +278,40 @@ class PyObfuscator:
             self.add_banner_to_module(module, banner_text)
 
         return True
+
+    def _minify_obfuscator_files(self):
+        """
+        Apply python-minifier to obfuscator files (builtin_dispatcher, antitamper, antidebug)
+        after all obfuscation is done. Does NOT touch user files.
+        """
+        try:
+            import python_minifier
+            
+            obfuscator_files = [
+                "_builtin_dispatcher.py",
+                "anti_tamper_builtins.py",
+                "antidebug_crossplatform.py",
+                "antidebug_llvm.py",
+            ]
+            
+            for py_file in self.output_dir.rglob("*.py"):
+                if py_file.name in obfuscator_files:
+                    try:
+                        with open(py_file, 'r', encoding='utf-8') as f:
+                            original_code = f.read()
+                        
+                        minified_code = python_minifier.minify(original_code)
+                        
+                        with open(py_file, 'w', encoding='utf-8') as f:
+                            f.write(minified_code)
+                        
+                        print(f"  Minified: {py_file}")
+                    except Exception as e:
+                        print(f"  Warning: Could not minify {py_file}: {e}")
+        except ImportError:
+            print("  Warning: python-minifier not installed, skipping minification of obfuscator files")
+        except Exception as e:
+            print(f"  Warning: Error during minification: {e}")
 
     def add_banner_to_module(self, module_path: Path, banner: str):
         """

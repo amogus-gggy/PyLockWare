@@ -259,10 +259,10 @@ class ObfuscatorGUI(QMainWindow):
         # Call obfuscation option
         call_obf_layout = QHBoxLayout()
         self.call_obf_checkbox = QCheckBox("Call obfuscation")
-        self.call_obf_checkbox.setToolTip("Enable call obfuscation using globals()[\"func_name\"]() pattern")
+        self.call_obf_checkbox.setToolTip("Enable chained-table call obfuscation (_call/_resolve)")
         self.call_obf_checkbox.clicked.connect(self.on_callobf_clicked)
         call_obf_layout.addWidget(self.call_obf_checkbox)
-        call_obf_layout.addWidget(self.create_help_button("Call obfuscation replaces direct function calls with globals()[\"func_name\"]() pattern, making function calls harder to analyze. КОНФЛИКТ: Несовместимо с import obf."))
+        call_obf_layout.addWidget(self.create_help_button("Call obfuscation replaces calls and attribute access with chained lookup tables (_call, _method_call, _get_attr). КОНФЛИКТ: Несовместимо с import obf."))
         call_obf_layout.addStretch()
         layout.addLayout(call_obf_layout)
 

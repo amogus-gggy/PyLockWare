@@ -112,6 +112,8 @@ class RemoveAnnotationsModule(ModuleBase):
     чтобы удалить декораторы и импорты pylockware из финального кода.
     """
     
+    PYLOCKWARE_DECORATORS = RemoveAnnotationsTransformer.PYLOCKWARE_DECORATORS
+
     def __init__(self, config: dict):
         super().__init__(config)
         self.name = "RemoveAnnotations"

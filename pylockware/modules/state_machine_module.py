@@ -37,7 +37,7 @@ class StateMachineModule(ModuleBase):
             )
 
             for py_file in output_path.rglob("*.py"):
-                if py_file.name not in ["obfuscator.py", "state_machine_transformer.py"]:
+                if py_file.name not in ["obfuscator.py", "state_machine_transformer.py", "antidebug_llvm.py", "antidebug_crossplatform.py"]:
                     try:
                         with open(py_file, 'r', encoding='utf-8') as f:
                             original_code = f.read()

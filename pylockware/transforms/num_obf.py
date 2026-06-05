@@ -2,10 +2,8 @@
 import random
 import ast
 import operator
-import time
 import sys
 import os
-from multiprocessing import Pool, cpu_count
 from functools import partial
 
 OPS = {
@@ -21,83 +19,224 @@ OPS = {
     '|': operator.or_,
 }
 
-def atomic_expr(n: int) -> str:
-    """
-    Гарантированно возвращает выражение != литералу,
-    которое вычисляется в n
-    """
-    if n == 0:
-        # Multiple anti-inlining techniques for 0
-        choices = [
-            "(~(-1))",                    # Bitwise: ~(-1)
-            "(lambda: 0)()",              # Function call
-            "len([])",                    # Empty list length
-            "hash('') % 1",               # Hash modulo 1
-            "sys.getsizeof(()) - sys.getsizeof(())",  # Runtime calculation
-        ]
-        return random.choice(choices)
+# Maximum recursion depth to prevent stack overflow
+MAX_DEPTH = 3
+# Maximum absolute value for target to prevent huge factorization
+MAX_TARGET = 10000
+# Timeout-like protection: max attempts per number
+MAX_ATTEMPTS = 50
 
-    if n == 1:
-        # Anti-inlining techniques for 1
-        choices = [
-            "(2 >> 1)",                   # Bit shift
-            "len([None])",                # List with one element
-            "bool([None])",               # Boolean conversion
-            "hash('a') % 2",              # Hash modulo 2
-            "(os.getpid() % 2) ^ (os.getpid() % 2) ^ 1",  # Runtime XOR
-        ]
-        return random.choice(choices)
 
-    if n == -1:
-        # Anti-inlining techniques for -1
-        choices = [
-            "(~0)",                       # Bitwise NOT
-            "-(len([None]))",             # Negative length
-            "-(bool([None]))",            # Negative boolean
-            "hash('') % 1 - 1",           # Hash calculation
-            "(time.time_ns() % 2) - (time.time_ns() % 2) - 1",  # Runtime
+import random
+
+
+def atomic_expr(n: int, use_runtime_noise: bool = False) -> str:
+    """
+    Возвращает выражение, которое вычисляется в n,
+    но старается не выглядеть как литерал.
+
+    ВАЖНО:
+    - никаких hash(), os.getpid(), random() в результирующем коде
+    - никаких runtime side effects
+    - никаких тяжелых конструкций
+    - выражения всегда deterministic
+    - выражения O(1)
+
+    Args:
+        n: число для обфускации
+        use_runtime_noise:
+            оставлен для совместимости, но runtime noise отключен намеренно
+    """
+
+    # ---------- helpers ----------
+
+    def wrap(x: str) -> str:
+        return f"({x})"
+
+    def xor_zero() -> str:
+        a = random.randint(1, 255)
+        return f"({a}^{a})"
+
+    def mul_one() -> str:
+        a = random.randint(2, 9)
+        return f"({a}//{a})"
+
+    def add_zero(expr: str) -> str:
+        return f"({expr}+{xor_zero()})"
+
+    def sub_zero(expr: str) -> str:
+        return f"({expr}-{xor_zero()})"
+
+    def mul_by_one(expr: str) -> str:
+        return f"({expr}*{mul_one()})"
+
+    def div_by_one(expr: str) -> str:
+        return f"({expr}//{mul_one()})"
+
+    def bool_num(v: int) -> str:
+        if v == 0:
+            return "int(False)"
+        return "int(True)"
+
+    # ---------- tiny constants ----------
+
+    SMALL = {
+        0: [
+            "0",
+            "(1-1)",
+            "(~0+1)",
+            "(False+0)",
+            "(int(False))",
+            "(0^0)",
+        ],
+        1: [
+            "1",
+            "(2>>1)",
+            "(True+0)",
+            "(int(True))",
+            "(3%2)",
+            "(1^0)",
+        ],
+        -1: [
+            "(-1)",
+            "(~0)",
+            "(0-1)",
+            "(-True)",
+        ],
+    }
+
+    if n in SMALL:
+        expr = random.choice(SMALL[n])
+
+        # легкая дополнительная обертка
+        wrappers = [
+            lambda e: add_zero(e),
+            lambda e: sub_zero(e),
+            lambda e: mul_by_one(e),
+            lambda e: div_by_one(e),
+            lambda e: wrap(e),
         ]
-        return random.choice(choices)
+
+        return random.choice(wrappers)(expr)
+
+    # ---------- negative ----------
 
     if n < 0:
         return f"(-{atomic_expr(-n)})"
 
-    # Anti-inlining: add runtime noise that cancels out
-    k = random.randint(1, 10)
-    noise_techniques = [
-        f"(({n + k}) - {k})",  # Basic arithmetic
-        f"(({n + k}) ^ {random.randint(1, 255)} ^ {random.randint(1, 255)}) - {k}",  # XOR noise
-        f"(({n + k} + (hash(str({k})) % {k})) - (hash(str({k})) % {k}) - {k})",  # Hash noise
-        f"(({n + k} + (os.getpid() % {k})) - (os.getpid() % {k}) - {k})",  # PID noise
+    # ---------- deterministic templates ----------
+
+    k = random.randint(2, 32)
+    a = random.randint(1, 255)
+    b = a ^ random.randint(1, 255)
+
+    templates = [
+        # arithmetic
+        f"(({n + k})-{k})",
+        f"(({n - k})+{k})",
+        f"(({n}+{k})-{k})",
+
+        # double compensation
+        f"(({n + k * 2})-{k}-{k})",
+
+        # xor reversible
+        f"((({n}^{a})^{a}))",
+
+        # xor + arithmetic
+        f"(((({n + k})^{a})^{a})-{k})",
+
+        # multiplication/division identity
+        f"(({n}*{k})//{k})",
+
+        # bit tricks
+        f"(({n}<<1)>>1)",
+
+        # modulo identity
+        f"(({n}+({k}*{k}))-({k}*{k}))",
+
+        # boolean compensation
+        f"({n}+int(False))",
+
+        # nested
+        f"((({n + k})-({k}//1)))",
     ]
-    return random.choice(noise_techniques)
+
+    expr = random.choice(templates)
+
+    # ---------- secondary wrapping ----------
+
+    wrappers = [
+        lambda e: add_zero(e),
+        lambda e: sub_zero(e),
+        lambda e: mul_by_one(e),
+        lambda e: div_by_one(e),
+        lambda e: wrap(e),
+        lambda e: f"(({e})<<1>>1)",
+        lambda e: f"(({e})+int(False))",
+    ]
+
+    # 1-3 harmless wrappers
+    for _ in range(random.randint(2, 4)):
+        expr = random.choice(wrappers)(expr)
+
+    return expr
+
+# Cache to prevent infinite recursion on same values
+_build_expr_cache = {}
+_build_expr_call_count = [0]
 
 def build_expr(target: int, depth: int, max_depth: int) -> str:
+    # Global call counter to prevent infinite loops
+    _build_expr_call_count[0] += 1
+    if _build_expr_call_count[0] > MAX_ATTEMPTS * 10:
+        return atomic_expr(target)
+
+    # Clamp target to prevent huge computations
+    if abs(target) > MAX_TARGET:
+        return atomic_expr(target)
+
     if depth >= max_depth:
         return atomic_expr(target)
 
-    # Sometimes use function-based expressions to prevent inlining
-    if random.random() < 0.2 and depth > 0:  # 20% chance, but not at top level
-        return _create_function_based_expr(target)
+    # Cache key to prevent re-computing same (target, depth)
+    cache_key = (target, depth, max_depth)
+    if cache_key in _build_expr_cache:
+        return _build_expr_cache[cache_key]
+
+    # 20% chance to use function-based expression (not at top level)
+    if random.random() < 0.2 and depth > 0:
+        result = _create_function_based_expr(target)
+        _build_expr_cache[cache_key] = result
+        return result
 
     op = random.choice(list(OPS.keys()))
 
     try:
         if op == '+':
-            a = random.randint(-100, 100)
+            a = random.randint(-50, 50)  # Reduced range
             b = target - a
         elif op == '-':
-            a = random.randint(-100, 100)
+            a = random.randint(-50, 50)
             b = a - target
         elif op == '*':
             if target == 0:
                 a, b = random.randint(1, 10), 0
             else:
-                factors = [d for d in range(1, abs(target) + 1) if target % d == 0]
-                a = random.choice(factors) if factors else 1
+                # FAST factorization: only check up to sqrt(|target|)
+                abs_t = abs(target)
+                factors = []
+                limit = min(int(abs_t ** 0.5) + 1, 1000)
+                for d in range(1, limit):
+                    if target % d == 0:
+                        factors.append(d)
+                        if d != target // d:
+                            factors.append(target // d)
+                if not factors:
+                    factors = [1, target]
+                a = random.choice(factors)
                 b = target // a if a != 0 else target
         elif op == '//':
-            b = random.randint(1, 10)  # Ensure b is never 0
+            b = random.randint(1, 10)
             a = target * b
         elif op == '%':
             if target == 0:
@@ -117,164 +256,129 @@ def build_expr(target: int, depth: int, max_depth: int) -> str:
             b = target ^ a
         elif op == '&':
             a = random.randint(1, 255)
-            b = target | a  # Will be ANDed with a
-            # Create expression: (b & a) = target
+            b = target | a
             left = build_expr(b, depth + 1, max_depth)
             right = build_expr(a, depth + 1, max_depth)
             expr = f"({left} & {right})"
-            if eval(expr) != target:
-                return atomic_expr(target)
+            try:
+                if eval(expr) != target:
+                    result = atomic_expr(target)
+                    _build_expr_cache[cache_key] = result
+                    return result
+            except:
+                result = atomic_expr(target)
+                _build_expr_cache[cache_key] = result
+                return result
+            _build_expr_cache[cache_key] = expr
             return expr
         elif op == '|':
             a = random.randint(0, 255)
-            b = target & ~a  # Will be ORed with a
+            b = target & ~a
             left = build_expr(b, depth + 1, max_depth)
             right = build_expr(a, depth + 1, max_depth)
             expr = f"({left} | {right})"
-            if eval(expr) != target:
-                return atomic_expr(target)
+            try:
+                if eval(expr) != target:
+                    result = atomic_expr(target)
+                    _build_expr_cache[cache_key] = result
+                    return result
+            except:
+                result = atomic_expr(target)
+                _build_expr_cache[cache_key] = result
+                return result
+            _build_expr_cache[cache_key] = expr
             return expr
         else:
-            return atomic_expr(target)
+            result = atomic_expr(target)
+            _build_expr_cache[cache_key] = result
+            return result
 
         left = build_expr(a, depth + 1, max_depth)
         right = build_expr(b, depth + 1, max_depth)
         expr = f"({left} {op} {right})"
 
-        # Add runtime noise that cancels out (anti-inlining)
-        if random.random() < 0.3:  # 30% chance to add noise
-            noise_type = random.choice(['hash', 'pid', 'time', 'platform'])
+        # Add runtime noise (anti-inlining) - 30% chance
+        if random.random() < 0.3:
+            noise_type = random.choice(['hash', 'pid', 'platform'])
             if noise_type == 'hash':
                 noise_val = random.randint(1, 100)
                 expr = f"({expr} + (hash(str({noise_val})) % {noise_val}) - (hash(str({noise_val})) % {noise_val}))"
             elif noise_type == 'pid':
                 noise_val = random.randint(1, 10)
                 expr = f"({expr} + (os.getpid() % {noise_val}) - (os.getpid() % {noise_val}))"
-            elif noise_type == 'time':
-                noise_val = random.randint(1, 10)
-                expr = f"({expr} + (int(time.time()) % {noise_val}) - (int(time.time()) % {noise_val}))"
             elif noise_type == 'platform':
                 noise_val = random.randint(1, 10)
                 expr = f"({expr} + (hash(sys.platform) % {noise_val}) - (hash(sys.platform) % {noise_val}))"
 
-        # жёсткая проверка
-        if eval(expr) != target:
-            return atomic_expr(target)
+        # Verify the expression evaluates correctly
+        try:
+            if eval(expr) != target:
+                result = atomic_expr(target)
+                _build_expr_cache[cache_key] = result
+                return result
+        except:
+            result = atomic_expr(target)
+            _build_expr_cache[cache_key] = result
+            return result
 
+        _build_expr_cache[cache_key] = expr
         return expr
 
-    except (ZeroDivisionError, ValueError, OverflowError) as e:
-        # Fallback to atomic expression on any arithmetic error
-        return atomic_expr(target)
+    except (ZeroDivisionError, ValueError, OverflowError, RecursionError):
+        result = atomic_expr(target)
+        _build_expr_cache[cache_key] = result
+        return result
+
 
 def _create_function_based_expr(target: int) -> str:
     """Create function-based expressions to prevent compiler inlining"""
     techniques = [
-        # Lambda functions
         lambda: f"(lambda: {target})()",
         lambda: f"((lambda x: x)({target}))",
         lambda: f"((lambda x={target}: x)())",
-
-        # Class-based
         lambda: f"type('_', (), {{'v': {target}}})().v",
         lambda: f"property(lambda self: {target}).fget(None)",
-
-        # Container-based
         lambda: f"[{target}][0]",
         lambda: f"({target},)[0]",
         lambda: f"{{0: {target}}}[0]",
         lambda: f"{{'v': {target}}}['v']",
-
-        # Generator/iterator
         lambda: f"next(iter([{target}]))",
         lambda: f"[x for x in [{target}]][0]",
         lambda: f"(x for x in [{target}]).__next__()",
-
-        # Runtime-dependent with cancellation
         lambda: f"{target} + (os.getpid() % 100 - os.getpid() % 100)",
         lambda: f"{target} + (hash(sys.platform) % 10 - hash(sys.platform) % 10)",
-        lambda: f"{target} + (int(time.time()) % 10 - int(time.time()) % 10)",
     ]
 
     return random.choice(techniques)()
 
+
 def obfuscate_number(n: int) -> str:
-    try:
-        # Sometimes use pure function-based expressions for better anti-inlining
-        if random.random() < 0.1:  # 10% chance for pure function-based
-            expr = _create_function_based_expr(n)
-        else:
-            expr = build_expr(n, 0, random.randint(2, 4))
+    # Reset call counter for each number
+    _build_expr_call_count[0] = 0
+    _build_expr_cache.clear()
 
-        # Verify the expression evaluates correctly
+    # For very large numbers, use atomic expression directly
+    if abs(n) > MAX_TARGET:
+        return atomic_expr(n)
+
+    for attempt in range(MAX_ATTEMPTS):
         try:
-            assert eval(expr) == n, f"Expression {expr} doesn't evaluate to {n}"
-        except:
-            # Fallback to atomic expression if verification fails
-            expr = atomic_expr(n)
+            if random.random() < 0.1:
+                expr = _create_function_based_expr(n)
+            else:
+                expr = build_expr(n, 0, random.randint(1, MAX_DEPTH))
 
-        return expr
-    except Exception as e:
-        # Ultimate fallback: return the number as-is
-        return str(n)
+            try:
+                if eval(expr) == n:
+                    return expr
+            except:
+                pass
+        except RecursionError:
+            pass
 
-def _obfuscate_number_worker(n: int) -> tuple:
-    """Worker function for parallel number obfuscation"""
-    try:
-        expr = obfuscate_number(n)
-        # Verify the result
-        if eval(expr) == n:
-            return (n, expr, True)
-        else:
-            return (n, str(n), False)
-    except Exception as e:
-        # Return original number on any error
-        return (n, str(n), False)
+    # Fallback to atomic expression after max attempts
+    return atomic_expr(n)
 
-def obfuscate_numbers_parallel(numbers: list) -> dict:
-    """
-    Obfuscate multiple numbers in parallel using multiprocessing.
-
-    Args:
-        numbers: List of integers to obfuscate
-
-    Returns:
-        Dictionary mapping original numbers to obfuscated expressions
-    """
-    if not numbers:
-        return {}
-
-    # Use all available CPU cores, but cap at 8 to avoid overhead
-    num_workers = min(cpu_count(), 8, len(numbers))
-
-    # For small number of items, don't use multiprocessing (overhead not worth it)
-    if len(numbers) < 10:
-        result = {}
-        for n in numbers:
-            result[n] = obfuscate_number(n)
-        return result
-
-    # Use multiprocessing for larger batches
-    try:
-        with Pool(processes=num_workers) as pool:
-            results = pool.map(_obfuscate_number_worker, numbers)
-
-        # Convert results to dictionary
-        return {n: expr for n, expr, success in results if success}
-    except Exception as e:
-        # Fallback to sequential processing if multiprocessing fails
-        print(f"Warning: Parallel processing failed, falling back to sequential: {e}")
-        result = {}
-        for n in numbers:
-            result[n] = obfuscate_number(n)
-        return result
-
-def get_imports_for_obfuscated_code() -> str:
-    """
-    Returns import statements needed for the obfuscated code to work.
-    These imports are required for runtime-dependent expressions.
-    """
-    return "import os\nimport time\nimport sys\n"
 
 def obfuscate_float(n: float) -> str:
     """
@@ -282,18 +386,14 @@ def obfuscate_float(n: float) -> str:
     а затем в выражение, которое воссоздает это значение.
     """
     s = str(n)
-    # Преобразуем строку в список ASCII кодов
     ascii_codes = [ord(c) for c in s]
 
-    # Obfuscate each ASCII code with anti-inlining techniques
     obfuscated_codes = []
     for code in ascii_codes:
-        # Use obfuscate_number for integers
         obfuscated_codes.append(obfuscate_number(code))
 
     codes_str = ', '.join(obfuscated_codes)
 
-    # Use function-based float conversion for extra obfuscation
     float_techniques = [
         f"float(''.join(chr(x) for x in [{codes_str}]))",
         f"(lambda s: float(s))(''.join(chr(x) for x in [{codes_str}]))",
@@ -302,23 +402,19 @@ def obfuscate_float(n: float) -> str:
 
     return random.choice(float_techniques)
 
+
 class NumberObfuscator(ast.NodeTransformer):
     """AST transformer to obfuscate integer and float literals in Python code."""
 
-    def __init__(self, use_parallel=True):
+    def __init__(self, use_parallel=False):
         self.number_counter = 0
-        self.required_imports = set()  # Track required imports
-        self.use_parallel = use_parallel
-
-        # Track if we're inside a @skip_obf function/class
+        self.required_imports = set()
+        self.use_parallel = False  # ALWAYS disabled
         self.skip_obf_depth = 0
-
-        # Collect all numbers for batch processing
         self.numbers_to_obfuscate = []
         self.obfuscated_cache = {}
 
     def _has_skip_obf_decorator(self, node):
-        """Check if node has @skip_obf decorator"""
         if not hasattr(node, 'decorator_list'):
             return False
 
@@ -330,7 +426,6 @@ class NumberObfuscator(ast.NodeTransformer):
         return False
 
     def visit_FunctionDef(self, node):
-        """Track when entering/exiting functions with @skip_obf"""
         if self._has_skip_obf_decorator(node):
             self.skip_obf_depth += 1
             self.generic_visit(node)
@@ -339,7 +434,6 @@ class NumberObfuscator(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node):
-        """Track when entering/exiting async functions with @skip_obf"""
         if self._has_skip_obf_decorator(node):
             self.skip_obf_depth += 1
             self.generic_visit(node)
@@ -348,7 +442,6 @@ class NumberObfuscator(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_ClassDef(self, node):
-        """Track when entering/exiting classes with @skip_obf"""
         if self._has_skip_obf_decorator(node):
             self.skip_obf_depth += 1
             self.generic_visit(node)
@@ -357,135 +450,86 @@ class NumberObfuscator(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def collect_numbers(self, tree):
-        """First pass: collect all numbers that need obfuscation"""
         collector = NumberCollector()
         collector.visit(tree)
         return collector.numbers
 
     def preprocess_numbers(self, tree):
-        """Collect and obfuscate all numbers in parallel before transformation"""
-        if not self.use_parallel:
-            return
-
-        # Collect all unique numbers
-        numbers = self.collect_numbers(tree)
-        unique_numbers = list(set(numbers))
-
-        if unique_numbers:
-            # Obfuscate in parallel
-            self.obfuscated_cache = obfuscate_numbers_parallel(unique_numbers)
+        pass  # No parallel processing
 
     def visit_Constant(self, node):
-        """Handle numeric constants in newer Python versions."""
-        # Skip if inside @skip_obf context
         if self.skip_obf_depth > 0:
             return node
 
         if isinstance(node.value, int) and not isinstance(node.value, bool):
-            # Use cached obfuscation if available
-            if self.use_parallel and node.value in self.obfuscated_cache:
-                obfuscated_expr = self.obfuscated_cache[node.value]
-            else:
-                # Obfuscate the number
-                obfuscated_expr = obfuscate_number(node.value)
+            obfuscated_expr = obfuscate_number(node.value)
 
-            # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
-            if 'time.time()' in obfuscated_expr or 'time.time_ns()' in obfuscated_expr:
-                self.required_imports.add('time')
             if 'sys.platform' in obfuscated_expr or 'sys.getsizeof' in obfuscated_expr:
                 self.required_imports.add('sys')
 
-            # Parse the obfuscated expression back to an AST node
             try:
                 obfuscated_node = ast.parse(obfuscated_expr, mode='eval').body
                 return obfuscated_node
             except:
-                # If parsing fails, return the original node
                 return node
 
         elif isinstance(node.value, float):
-            # Obfuscate the float value
             obfuscated_expr = obfuscate_float(node.value)
 
-            # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
-            if 'time.time()' in obfuscated_expr or 'time.time_ns()' in obfuscated_expr:
-                self.required_imports.add('time')
             if 'sys.platform' in obfuscated_expr:
                 self.required_imports.add('sys')
 
-            # Parse the obfuscated expression back to an AST node
             try:
                 obfuscated_node = ast.parse(obfuscated_expr, mode='eval').body
                 return obfuscated_node
             except:
-                # If parsing fails, return the original node
                 return node
 
         return node
 
     def visit_Num(self, node):
-        """Handle numeric literals in older Python versions."""
-
         if isinstance(node.n, int):
-            # Use cached obfuscation if available
-            if self.use_parallel and node.n in self.obfuscated_cache:
-                obfuscated_expr = self.obfuscated_cache[node.n]
-            else:
-                # Obfuscate the number
-                obfuscated_expr = obfuscate_number(node.n)
+            obfuscated_expr = obfuscate_number(node.n)
 
-            # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
-            if 'time.time()' in obfuscated_expr or 'time.time_ns()' in obfuscated_expr:
-                self.required_imports.add('time')
             if 'sys.platform' in obfuscated_expr or 'sys.getsizeof' in obfuscated_expr:
                 self.required_imports.add('sys')
 
-            # Parse the obfuscated expression back to an AST node
             try:
                 obfuscated_node = ast.parse(obfuscated_expr, mode='eval').body
                 return obfuscated_node
             except:
-                # If parsing fails, return the original node
                 return node
 
         elif isinstance(node.n, float):
-            # Obfuscate the float value
             obfuscated_expr = obfuscate_float(node.n)
 
-            # Check if the expression uses runtime modules
             if 'os.getpid()' in obfuscated_expr:
                 self.required_imports.add('os')
-            if 'time.time()' in obfuscated_expr or 'time.time_ns()' in obfuscated_expr:
-                self.required_imports.add('time')
             if 'sys.platform' in obfuscated_expr:
                 self.required_imports.add('sys')
 
-            # Parse the obfuscated expression back to an AST node
             try:
                 obfuscated_node = ast.parse(obfuscated_expr, mode='eval').body
                 return obfuscated_node
             except:
-                # If parsing fails, return the original node
                 return node
 
         return node
 
     def get_required_imports(self) -> str:
-        """Get the import statements needed for the obfuscated code."""
         imports = []
         if 'os' in self.required_imports:
             imports.append('import os')
-        if 'time' in self.required_imports:
-            imports.append('import time')
         if 'sys' in self.required_imports:
             imports.append('import sys')
         return '\n'.join(imports) if imports else ''
+
 
 class NumberCollector(ast.NodeVisitor):
     """Visitor to collect all numbers in the AST for batch processing"""
@@ -495,7 +539,6 @@ class NumberCollector(ast.NodeVisitor):
         self.skip_obf_depth = 0
 
     def _has_skip_obf_decorator(self, node):
-        """Check if node has @skip_obf decorator"""
         if not hasattr(node, 'decorator_list'):
             return False
 
@@ -507,7 +550,6 @@ class NumberCollector(ast.NodeVisitor):
         return False
 
     def visit_FunctionDef(self, node):
-        """Track when entering/exiting functions with @skip_obf"""
         if self._has_skip_obf_decorator(node):
             self.skip_obf_depth += 1
             self.generic_visit(node)
@@ -516,7 +558,6 @@ class NumberCollector(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node):
-        """Track when entering/exiting async functions with @skip_obf"""
         if self._has_skip_obf_decorator(node):
             self.skip_obf_depth += 1
             self.generic_visit(node)
@@ -525,7 +566,6 @@ class NumberCollector(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ClassDef(self, node):
-        """Track when entering/exiting classes with @skip_obf"""
         if self._has_skip_obf_decorator(node):
             self.skip_obf_depth += 1
             self.generic_visit(node)
@@ -534,14 +574,12 @@ class NumberCollector(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Constant(self, node):
-        """Collect integer constants"""
         if self.skip_obf_depth == 0:
             if isinstance(node.value, int) and not isinstance(node.value, bool):
                 self.numbers.append(node.value)
         self.generic_visit(node)
 
     def visit_Num(self, node):
-        """Collect numeric literals (older Python versions)"""
         if self.skip_obf_depth == 0:
             if isinstance(node.n, int):
                 self.numbers.append(node.n)

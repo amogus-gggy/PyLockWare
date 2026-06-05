@@ -37,6 +37,9 @@ setup(
         "tomli>=2.0.0; python_version<'3.11'",
         "tomli-w>=1.0.0",
         "psutil>=5.0.0",
+        "python-minifier",
+        "llvmlite",
+        "tomli"
     ],
     extras_require={
         "gui": [

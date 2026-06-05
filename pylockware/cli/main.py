@@ -36,8 +36,10 @@ def main_cli():
     parser.add_argument("--name-gen", choices=['english', 'chinese', 'mixed', 'numbers', 'hex'],
                        default='english', help="Character set for name generation (default: english)")
     parser.add_argument("--decorator-obf", action="store_true", help="Enable decorator obfuscation (converts @decorator to func = decorator(func))")
-    parser.add_argument("--call-obf", action="store_true", help="Enable call obfuscation using getattr(sys.modules[\"__main__\"], \"func_name\")() pattern")
+    parser.add_argument("--call-obf", action="store_true", help="Enable chained-table call obfuscation (_call/_resolve)")
     parser.add_argument("--crypt", action="store_true", help="Enable function encryption using machine fingerprinting and XOR encryption")
+    parser.add_argument("--anti-tamper-builtins", action=argparse.BooleanOptionalAction, default=True,
+                        help="Enable runtime anti-tamper guard that crashes on patched Python builtins (default: enabled)")
     parser.add_argument("--all", action="store_true", help="Enable all obfuscation options (except Nuitka)")
 
     # Nuitka EXE packaging options
@@ -110,6 +112,7 @@ def main_cli():
         decorator_obf=args.decorator_obf,
         call_obf=args.call_obf,
         crypt=args.crypt,
+        anti_tamper_builtins=args.anti_tamper_builtins,
         enable_nuitka=args.nuitka,
         nuitka_onefile=args.nuitka_onefile,
         nuitka_standalone=args.nuitka_standalone,
