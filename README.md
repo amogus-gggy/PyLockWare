@@ -5,9 +5,11 @@
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## Changelog
-- Removed virtualization, because it was too hard to implement fully
-- Added crypter module
+## Changelog v2.2.0
+- stability improvements
+-  bug fixes
+-  improvements in crypt, call_obf modules.
+-   Added builtin antitamper(has some bugs, dont use it please)
 
 
 ## 🚀 Features
