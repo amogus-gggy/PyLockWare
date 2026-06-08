@@ -1,5 +1,5 @@
 """
-Junk Code Transformer for PyLockWare
+Junk Code Transformer for PyLockware
 Generates fake if/elif branches with opaque predicates and complex conditions.
 Now with anti-dump string poisoning and maximum visual annoyance.
 """
@@ -38,15 +38,12 @@ def generate_random_strings(count, min_len=1, max_len=10):
     return random_strings
 
 
-
-
 class JunkCodeTransformer(ast.NodeTransformer):
     """
     Transforms code by adding fake if/elif branches, try/except blocks,
     dead loops, nested dead code, and ANTI-DUMP strings.
     These constructs are side‑effect free and never alter program logic.
     """
-
 
     ANTI_DUMP_STRINGS = generate_random_strings(500, min_len=3, max_len=64)
 
@@ -66,6 +63,10 @@ class JunkCodeTransformer(ast.NodeTransformer):
 
     def _anti_dump_constant(self):
         return ast.Constant(value=self._anti_dump_string())
+
+    def _make_debug_docstring(self, text):
+        """Create a debug docstring marker as an Expr node."""
+        return ast.Expr(value=ast.Constant(value=f"[DEBUG] {text}"))
 
     # ------------------------------------------------------------------
     # Opaque predicates (always True)
@@ -378,16 +379,54 @@ class JunkCodeTransformer(ast.NodeTransformer):
 
     # ------------------------------------------------------------------
     # Junk statements (harmless, side‑effect free) with anti-dump strings
+    # Now ALL junk blocks feature and use poisoned variables!
     # ------------------------------------------------------------------
-    def _generate_junk_statement(self):
+    def _generate_junk_statement(self, poison_names=None):
         junk_var = self._rand_name()
         kind = random.choice([
             'assign', 'list_comp', 'dict_comp', 'expr', 'anti_dump_assign',
             'anti_dump_list', 'anti_dump_dict', 'anti_dump_expr', 'anti_dump_tuple',
             'anti_dump_join', 'anti_dump_format', 'nested_ternary_fake',
+            'poison_use'  # New kind specifically for using the poison vars
         ])
 
-        if kind == 'assign':
+        # If poison names are provided, force using them occasionally
+        if poison_names and random.random() < 0.8:
+            kind = 'poison_use'
+
+        if kind == 'poison_use' and poison_names:
+            used_poison = random.choice(poison_names)
+            use_kind = random.choice(['str', 'len', 'repr', 'type_name', 'id_hash'])
+            prev_load = ast.Name(id=used_poison, ctx=ast.Load())
+
+            if use_kind == 'str':
+                value = ast.Call(func=ast.Name(id='str', ctx=ast.Load()), args=[prev_load], keywords=[])
+            elif use_kind == 'len':
+                value = ast.Call(
+                    func=ast.Name(id='len', ctx=ast.Load()),
+                    args=[ast.Call(func=ast.Name(id='str', ctx=ast.Load()), args=[prev_load], keywords=[])],
+                    keywords=[]
+                )
+            elif use_kind == 'repr':
+                value = ast.Call(func=ast.Name(id='repr', ctx=ast.Load()), args=[prev_load], keywords=[])
+            elif use_kind == 'type_name':
+                value = ast.Attribute(
+                    value=ast.Call(func=ast.Name(id='type', ctx=ast.Load()), args=[prev_load], keywords=[]),
+                    attr='__name__', ctx=ast.Load()
+                )
+            else:  # id_hash
+                value = ast.BinOp(
+                    left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()), args=[prev_load], keywords=[]),
+                    op=ast.BitAnd(),
+                    right=ast.Constant(0xFFFF)
+                )
+
+            return ast.Assign(
+                targets=[ast.Name(id=junk_var, ctx=ast.Store())],
+                value=value
+            )
+
+        elif kind == 'assign':
             return ast.Assign(
                 targets=[ast.Name(id=junk_var, ctx=ast.Store())],
                 value=ast.BinOp(
@@ -519,10 +558,18 @@ class JunkCodeTransformer(ast.NodeTransformer):
         return ast.Pass()
 
     def _generate_junk_block(self, num_statements=5):
-        """Generate a block of junk statements. Safe even when num_statements < 2."""
+        """Generate a block of junk statements. All blocks now create and use poison vars."""
         lo = 1
         hi = max(lo, num_statements)
-        return [self._generate_junk_statement() for _ in range(random.randint(lo, hi))]
+
+        # Every junk block now creates its own poison var chain!
+        poison_stmts, poison_names = self._generate_poison_var_block()
+
+        stmts = [self._make_debug_docstring(f"Junk block poisoned with: {', '.join(poison_names)}")]
+        stmts.extend(poison_stmts)
+        stmts.extend([self._generate_junk_statement(poison_names=poison_names) for _ in range(random.randint(lo, hi))])
+
+        return stmts
 
     # ------------------------------------------------------------------
     # Poison variable system — semantically entangled fake variables.
@@ -596,7 +643,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             prev_load = ast.Name(id=prev_name, ctx=ast.Load())
 
             if kind == 'str_concat':
-                # new = str(prev) + ""   — always a str, type-safe
                 value = ast.BinOp(
                     left=ast.Call(func=ast.Name(id='str', ctx=ast.Load()),
                                   args=[prev_load], keywords=[]),
@@ -604,13 +650,11 @@ class JunkCodeTransformer(ast.NodeTransformer):
                     right=ast.Constant(value="")
                 )
             elif kind == 'bool_not':
-                # new = not not prev   — always bool, type-safe
                 value = ast.UnaryOp(
                     op=ast.Not(),
                     operand=ast.UnaryOp(op=ast.Not(), operand=prev_load)
                 )
             elif kind == 'len_wrap':
-                # new = len(str(prev))   — always int, type-safe
                 value = ast.Call(
                     func=ast.Name(id='len', ctx=ast.Load()),
                     args=[ast.Call(func=ast.Name(id='str', ctx=ast.Load()),
@@ -618,21 +662,17 @@ class JunkCodeTransformer(ast.NodeTransformer):
                     keywords=[]
                 )
             elif kind == 'list_wrap':
-                # new = [prev]   — always list
                 value = ast.List(elts=[prev_load], ctx=ast.Load())
             elif kind == 'str_repr':
-                # new = repr(prev)   — always str
                 value = ast.Call(func=ast.Name(id='repr', ctx=ast.Load()),
                                  args=[prev_load], keywords=[])
             elif kind == 'type_check':
-                # new = type(prev).__name__   — always str
                 value = ast.Attribute(
                     value=ast.Call(func=ast.Name(id='type', ctx=ast.Load()),
                                    args=[prev_load], keywords=[]),
                     attr='__name__', ctx=ast.Load()
                 )
             elif kind == 'id_hash':
-                # new = id(prev) & 0xFFFF   — id() always returns int, safe
                 value = ast.BinOp(
                     left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
                                   args=[prev_load], keywords=[]),
@@ -640,7 +680,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
                     right=ast.Constant(0xFFFF)
                 )
             elif kind == 'id_and':
-                # new = id(prev) ^ id(prev)   — always 0, int, safe
                 value = ast.BinOp(
                     left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
                                   args=[prev_load], keywords=[]),
@@ -649,14 +688,12 @@ class JunkCodeTransformer(ast.NodeTransformer):
                                    args=[ast.Name(id=prev_name, ctx=ast.Load())], keywords=[])
                 )
             elif kind == 'ternary_self':
-                # new = prev if True else prev   — always == prev, no truthiness eval
                 value = ast.IfExp(
                     test=ast.Constant(True),
                     body=prev_load,
                     orelse=ast.Name(id=prev_name, ctx=ast.Load())
                 )
             else:  # tuple_wrap
-                # new = (prev,)[0]   — type-safe subscript of a 1-tuple
                 value = ast.Subscript(
                     value=ast.Tuple(elts=[prev_load], ctx=ast.Load()),
                     slice=ast.Constant(0),
@@ -668,6 +705,8 @@ class JunkCodeTransformer(ast.NodeTransformer):
                 value=value
             ))
 
+        # Mark where the poison vars are created
+        stmts.insert(0, self._make_debug_docstring(f"Poison vars created: {', '.join(names)}"))
         return stmts, names
 
     def _generate_poison_guard(self, poison_names):
@@ -692,7 +731,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
         ])
 
         if cond_kind == 'id_eq':
-            # id(v) == id(v) — always true, references v twice
             v = _ref(used[0])
             test = ast.Compare(
                 left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()), args=[v], keywords=[]),
@@ -702,7 +740,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             )
 
         elif cond_kind == 'type_is_type':
-            # type(v) is type(v) — always true
             v = _ref(used[0])
             test = ast.Compare(
                 left=ast.Call(func=ast.Name(id='type', ctx=ast.Load()), args=[v], keywords=[]),
@@ -712,7 +749,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             )
 
         elif cond_kind == 'bool_or_true':
-            # bool(v) or True — always true (but evaluates v)
             test = ast.BoolOp(
                 op=ast.Or(),
                 values=[
@@ -723,7 +759,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             )
 
         elif cond_kind == 'str_not_empty_or_true':
-            # str(v) is not None — always true
             test = ast.Compare(
                 left=ast.Call(func=ast.Name(id='str', ctx=ast.Load()),
                               args=[_ref(used[0])], keywords=[]),
@@ -732,7 +767,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             )
 
         elif cond_kind == 'and_chain' and len(used) >= 2:
-            # id(a) >= 0 and id(b) >= 0 — always true
             parts = [
                 ast.Compare(
                     left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
@@ -745,7 +779,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             test = ast.BoolOp(op=ast.And(), values=parts)
 
         elif cond_kind == 'len_ge_zero':
-            # len(str(v)) >= 0 — always true
             test = ast.Compare(
                 left=ast.Call(
                     func=ast.Name(id='len', ctx=ast.Load()),
@@ -758,7 +791,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             )
 
         elif cond_kind == 'id_gt_zero':
-            # id(v) > 0 — always true on CPython
             test = ast.Compare(
                 left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
                               args=[_ref(used[0])], keywords=[]),
@@ -767,7 +799,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             )
 
         else:
-            # fallback: id(v) >= 0
             test = ast.Compare(
                 left=ast.Call(func=ast.Name(id='id', ctx=ast.Load()),
                               args=[_ref(used[0])], keywords=[]),
@@ -776,7 +807,7 @@ class JunkCodeTransformer(ast.NodeTransformer):
             )
 
         # Body of the guard: reference the vars again + some extra junk
-        body = []
+        body = [self._make_debug_docstring(f"Poison guard uses: {', '.join(used)}")]
         for name in used:
             body.append(ast.Assign(
                 targets=[ast.Name(id=self._rand_name(), ctx=ast.Store())],
@@ -868,8 +899,6 @@ class JunkCodeTransformer(ast.NodeTransformer):
             )
         )
 
-        # Catch everything open() might raise (FileNotFoundError, PermissionError, etc.)
-        # as well as the RuntimeError we raise inside the body.
         handler = ast.ExceptHandler(
             type=ast.Name(id='Exception', ctx=ast.Load()),
             name=None,
@@ -903,7 +932,7 @@ class JunkCodeTransformer(ast.NodeTransformer):
         return [try_node]
 
     def _generate_fake_assert_block(self):
-        asserts = []
+        asserts = [self._make_debug_docstring("Fake assert block with poison vars")]
         for _ in range(random.randint(2, 4)):
             asserts.append(
                 ast.Assert(
