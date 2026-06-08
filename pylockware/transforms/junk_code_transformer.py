@@ -66,8 +66,9 @@ class JunkCodeTransformer(ast.NodeTransformer):
 
     def _make_debug_docstring(self, text):
         """Create a debug docstring marker as an Expr node."""
-        return ast.Expr(value=ast.Constant(value=f"[DEBUG] {text}"))
+        #return ast.Expr(value=ast.Constant(value=f"[DEBUG] {text}"))
 
+        return ast.Pass()
     # ------------------------------------------------------------------
     # Opaque predicates (always True)
     # ------------------------------------------------------------------

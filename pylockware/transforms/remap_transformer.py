@@ -23,56 +23,59 @@ class GlobalRenamer(ast.NodeTransformer):
         # Track classes that inherit from BaseModel (Pydantic)
         self.pydantic_classes = set()
 
+        # Track imported names (modules, aliases) to avoid renaming their attributes
+        self.imported_names = set()
+
         # Add common built-in methods and attributes that shouldn't be renamed
         self.protected_names = self.builtin_names | {
             # Dictionary methods
-            'keys', 'values', 'items', 'get', 'pop', 'popitem', 'update', 
+            'keys', 'values', 'items', 'get', 'pop', 'popitem', 'update',
             'setdefault', 'clear', 'copy', 'fromkeys',
             # List methods
-            'append', 'extend', 'insert', 'remove', 'pop', 'index', 'count', 
+            'append', 'extend', 'insert', 'remove', 'pop', 'index', 'count',
             'sort', 'reverse',
             # String methods
-            'capitalize', 'casefold', 'center', 'count', 'encode', 'endswith', 
-            'expandtabs', 'find', 'format', 'format_map', 'index', 'isalnum', 
-            'isalpha', 'isdecimal', 'isdigit', 'isidentifier', 'islower', 
-            'isnumeric', 'isprintable', 'isspace', 'istitle', 'isupper', 
-            'join', 'ljust', 'lower', 'lstrip', 'maketrans', 'partition', 
-            'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit', 
-            'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase', 
+            'capitalize', 'casefold', 'center', 'count', 'encode', 'endswith',
+            'expandtabs', 'find', 'format', 'format_map', 'index', 'isalnum',
+            'isalpha', 'isdecimal', 'isdigit', 'isidentifier', 'islower',
+            'isnumeric', 'isprintable', 'isspace', 'istitle', 'isupper',
+            'join', 'ljust', 'lower', 'lstrip', 'maketrans', 'partition',
+            'replace', 'rfind', 'rindex', 'rjust', 'rpartition', 'rsplit',
+            'rstrip', 'split', 'splitlines', 'startswith', 'strip', 'swapcase',
             'title', 'translate', 'upper', 'zfill',
             # General object methods
-            'append', 'extend', 'insert', 'remove', 'index', 'count', 'sort', 
-            'reverse', 'pop', 'clear', 'copy', 'keys', 'values', 'items', 
-            'get', 'setdefault', 'update', 'pop', 'popitem', 'clear', 'copy', 
-            'fromkeys', '__class__', '__delattr__', '__dir__', '__eq__', 
-            '__format__', '__ge__', '__getattribute__', '__gt__', '__hash__', 
-            '__init__', '__init_subclass__', '__le__', '__lt__', '__ne__', 
-            '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__', 
+            'append', 'extend', 'insert', 'remove', 'index', 'count', 'sort',
+            'reverse', 'pop', 'clear', 'copy', 'keys', 'values', 'items',
+            'get', 'setdefault', 'update', 'pop', 'popitem', 'clear', 'copy',
+            'fromkeys', '__class__', '__delattr__', '__dir__', '__eq__',
+            '__format__', '__ge__', '__getattribute__', '__gt__', '__hash__',
+            '__init__', '__init_subclass__', '__le__', '__lt__', '__ne__',
+            '__new__', '__reduce__', '__reduce_ex__', '__repr__', '__setattr__',
             '__sizeof__', '__str__', '__subclasshook__',
             # File methods
-            'close', 'flush', 'read', 'readline', 'readlines', 'seek', 'tell', 
+            'close', 'flush', 'read', 'readline', 'readlines', 'seek', 'tell',
             'truncate', 'write', 'writelines',
             # Set methods
-            'add', 'discard', 'intersection', 'intersection_update', 'isdisjoint', 
-            'issubset', 'issuperset', 'pop', 'remove', 'symmetric_difference', 
+            'add', 'discard', 'intersection', 'intersection_update', 'isdisjoint',
+            'issubset', 'issuperset', 'pop', 'remove', 'symmetric_difference',
             'symmetric_difference_update', 'union', 'update',
             # Tuple methods (though tuples don't have many)
-            '__add__', '__contains__', '__getitem__', '__iter__', '__len__', 
+            '__add__', '__contains__', '__getitem__', '__iter__', '__len__',
             '__mul__', '__rmul__',
             # Type methods
-            'mro', '__bases__', '__name__', '__qualname__', '__doc__', 
-            '__module__', '__dict__', '__weakref__', '__annotations__', 
-            '__init__', '__new__', '__del__', '__repr__', '__str__', 
-            '__format__', '__hash__', '__getattribute__', '__setattr__', 
-            '__delete__', '__lt__', '__le__', '__eq__', '__ne__', '__gt__', 
-            '__ge__', '__get__', '__set__', '__delete__', '__set_name__', 
-            '__init_subclass__', '__prepare__', '__instancecheck__', 
+            'mro', '__bases__', '__name__', '__qualname__', '__doc__',
+            '__module__', '__dict__', '__weakref__', '__annotations__',
+            '__init__', '__new__', '__del__', '__repr__', '__str__',
+            '__format__', '__hash__', '__getattribute__', '__setattr__',
+            '__delete__', '__lt__', '__le__', '__eq__', '__ne__', '__gt__',
+            '__ge__', '__get__', '__set__', '__delete__', '__set_name__',
+            '__init_subclass__', '__prepare__', '__instancecheck__',
             '__subclasscheck__', '__class_getitem__',
         }
-        
+
         # Track global declarations in each scope
         self.global_declarations = set()
-        
+
         # Only include non-protected names in replacements
         self.global_replacements = {
             k: v
@@ -82,6 +85,10 @@ class GlobalRenamer(ast.NodeTransformer):
 
     def visit_Import(self, node):
         for alias in node.names:
+            # Remember imported names so we don't rename their attributes
+            name = alias.asname or alias.name.split(".")[0]
+            self.imported_names.add(name)
+
             # Don't rename imports of builtin modules
             if alias.name.split(".")[0] in self.builtin_names:
                 continue
@@ -90,6 +97,10 @@ class GlobalRenamer(ast.NodeTransformer):
         return node
 
     def visit_ImportFrom(self, node):
+        # Remember the module and imported names
+        if node.module:
+            self.imported_names.add(node.module.split(".")[0])
+
         # Don't rename imports from builtin modules
         if node.module and any(
             node.module == name or node.module.startswith(f"{name}.")
@@ -98,6 +109,12 @@ class GlobalRenamer(ast.NodeTransformer):
             return node
 
         for alias in node.names:
+            # Remember imported names/aliases
+            if alias.asname:
+                self.imported_names.add(alias.asname)
+            else:
+                self.imported_names.add(alias.name)
+
             old = alias.name
             if old in self.global_replacements:
                 alias.name = self.global_replacements[old]
@@ -106,10 +123,15 @@ class GlobalRenamer(ast.NodeTransformer):
         return node
 
     def visit_Attribute(self, node):
-        # Rename attribute names if they're in the remap map
-        # Only rename the attribute part (not the value part)
-        # But don't rename protected/built-in attributes
-        if node.attr in self.global_replacements and node.attr not in self.protected_names:
+        # Rename attribute names only when accessed directly on a local variable.
+        # Skip calls (foo().bar), chained imports (datetime.datetime.hour) and
+        # imported modules to avoid breaking built-in / library attributes.
+        if (
+            isinstance(node.value, ast.Name)
+            and node.value.id not in self.imported_names
+            and node.attr in self.global_replacements
+            and node.attr not in self.protected_names
+        ):
             node.attr = self.global_replacements[node.attr]
         # Visit the value part (the object whose attribute we're accessing)
         self.generic_visit(node)

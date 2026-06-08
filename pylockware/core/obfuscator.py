@@ -288,7 +288,6 @@ class PyObfuscator:
             import python_minifier
             
             obfuscator_files = [
-                "_builtin_dispatcher.py",
                 "anti_tamper_builtins.py",
                 "antidebug_crossplatform.py",
                 "antidebug_llvm.py",
