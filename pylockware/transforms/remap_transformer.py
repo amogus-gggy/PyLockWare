@@ -70,7 +70,7 @@ class GlobalRenamer(ast.NodeTransformer):
             '__delete__', '__lt__', '__le__', '__eq__', '__ne__', '__gt__',
             '__ge__', '__get__', '__set__', '__delete__', '__set_name__',
             '__init_subclass__', '__prepare__', '__instancecheck__',
-            '__subclasscheck__', '__class_getitem__',
+            '__subclasscheck__', '__class_getitem__', "file_selected" #temp fix
         }
 
         # Track global declarations in each scope

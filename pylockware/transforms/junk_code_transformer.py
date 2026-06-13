@@ -932,16 +932,7 @@ class JunkCodeTransformer(ast.NodeTransformer):
         )
         return [try_node]
 
-    def _generate_fake_assert_block(self):
-        asserts = [self._make_debug_docstring("Fake assert block with poison vars")]
-        for _ in range(random.randint(2, 4)):
-            asserts.append(
-                ast.Assert(
-                    test=self._generate_opaque_true(),
-                    msg=self._anti_dump_constant()
-                )
-            )
-        return asserts
+
 
     def _generate_fake_docstring(self):
         parts = [self._anti_dump_string() for _ in range(random.randint(3, 6))]
@@ -953,7 +944,7 @@ class JunkCodeTransformer(ast.NodeTransformer):
     # ------------------------------------------------------------------
     def _generate_junk_compound(self):
         choice = random.choices(
-            ['if', 'try', 'for', 'while', 'nested_if', 'nested_try', 'with', 'assert'],
+            ['if', 'try', 'for', 'while', 'nested_if', 'nested_try', 'with'],
             weights=[25, 20, 15, 10, 15, 10, 3, 2],
             k=1
         )[0]
@@ -1064,13 +1055,8 @@ class JunkCodeTransformer(ast.NodeTransformer):
         elif choice == 'with':
             return self._generate_fake_with_block()[0]
 
-        elif choice == 'assert':
-            asserts = self._generate_fake_assert_block()
-            return ast.If(
-                test=self._generate_opaque_true(),
-                body=asserts,
-                orelse=[]
-            )
+
+
 
         return ast.Pass()
 

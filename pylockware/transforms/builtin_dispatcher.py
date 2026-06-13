@@ -17,7 +17,7 @@ BUILTIN_FUNCTIONS = [
     'isinstance', 'issubclass', 'iter', 'len', 'list', 'locals', 'map', 'max',
     'memoryview', 'min', 'next', 'object', 'oct', 'open', 'ord', 'pow', 'print',
     'property', 'range', 'repr', 'reversed', 'round', 'set', 'setattr', 'slice',
-    'sorted', 'staticmethod', 'str', 'sum', 'super', 'tuple', 'type', 'vars', 'zip',
+    'sorted', 'staticmethod', 'str', 'sum', 'tuple', 'type', 'vars', 'zip',
     '__import__'
 ]
 
@@ -37,6 +37,51 @@ class BuiltinDispatcherTransformer(ast.NodeTransformer):
         self.builtins_map: Dict[str, str] = {}
         self.imported_builtins = set()
         self.skip_obf_depth = 0
+        self.scope_stack: list[set[str]] = []
+        self.global_declarations: set[str] = set()
+        self.nonlocal_declarations: set[str] = set()
+
+    def _push_scope(self) -> None:
+        self.scope_stack.append(set())
+
+    def _pop_scope(self) -> None:
+        self.scope_stack.pop()
+
+    def _bind_name(self, name: str) -> None:
+        if self.scope_stack:
+            self.scope_stack[-1].add(name)
+
+    def _bind_target(self, target: ast.AST) -> None:
+        for name in self._names_in_target(target):
+            self._bind_name(name)
+
+    @staticmethod
+    def _names_in_target(node: ast.AST) -> set[str]:
+        names: set[str] = set()
+        if isinstance(node, ast.Name):
+            names.add(node.id)
+        elif isinstance(node, (ast.Tuple, ast.List)):
+            for elt in node.elts:
+                names |= BuiltinDispatcherTransformer._names_in_target(elt)
+        elif isinstance(node, ast.Starred):
+            names |= BuiltinDispatcherTransformer._names_in_target(node.value)
+        return names
+
+    @staticmethod
+    def _arg_names(args: ast.arguments) -> set[str]:
+        names = {a.arg for a in args.args}
+        names |= {a.arg for a in args.posonlyargs}
+        names |= {a.arg for a in args.kwonlyargs}
+        if args.vararg:
+            names.add(args.vararg.arg)
+        if args.kwarg:
+            names.add(args.kwarg.arg)
+        return names
+
+    def _is_shadowed(self, name: str) -> bool:
+        if name in self.global_declarations or name in self.nonlocal_declarations:
+            return False
+        return any(name in scope for scope in self.scope_stack)
 
     def _has_skip_obf_decorator(self, node):
         if not hasattr(node, 'decorator_list'):
@@ -48,29 +93,137 @@ class BuiltinDispatcherTransformer(ast.NodeTransformer):
                 return True
         return False
 
-    def visit_FunctionDef(self, node):
-        if self._has_skip_obf_decorator(node):
-            self.skip_obf_depth += 1
-            self.generic_visit(node)
-            self.skip_obf_depth -= 1
-            return node
-        return self.generic_visit(node)
-
-    def visit_AsyncFunctionDef(self, node):
-        if self._has_skip_obf_decorator(node):
-            self.skip_obf_depth += 1
-            self.generic_visit(node)
-            self.skip_obf_depth -= 1
-            return node
-        return self.generic_visit(node)
-
     def visit_ClassDef(self, node):
         if self._has_skip_obf_decorator(node):
             self.skip_obf_depth += 1
             self.generic_visit(node)
             self.skip_obf_depth -= 1
             return node
-        return self.generic_visit(node)
+        self._push_scope()
+        node = self.generic_visit(node)
+        self._pop_scope()
+        return node
+
+    def visit_Module(self, node):
+        self._push_scope()
+        node = self.generic_visit(node)
+        self._pop_scope()
+        return node
+
+    def visit_Lambda(self, node):
+        self._push_scope()
+        for name in self._arg_names(node.args):
+            self._bind_name(name)
+        node = self.generic_visit(node)
+        self._pop_scope()
+        return node
+
+    def visit_Global(self, node):
+        self.global_declarations.update(node.names)
+        return node
+
+    def visit_Nonlocal(self, node):
+        self.nonlocal_declarations.update(node.names)
+        return node
+
+    def visit_Import(self, node: ast.Import) -> ast.AST:
+        for alias in node.names:
+            if alias.name == 'builtins':
+                self.imported_builtins.add(alias.asname or 'builtins')
+            self._bind_name(alias.asname or alias.name.split('.')[0])
+        return node
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST:
+        if node.module == 'builtins':
+            for alias in node.names:
+                self.imported_builtins.add(alias.asname or alias.name)
+        for alias in node.names:
+            if alias.name != '*':
+                self._bind_name(alias.asname or alias.name)
+        return node
+
+    def visit_Assign(self, node):
+        node.value = self.visit(node.value)
+        for target in node.targets:
+            self._bind_target(target)
+        node.targets = [self.visit(t) for t in node.targets]
+        return node
+
+    def visit_AnnAssign(self, node):
+        if node.value:
+            node.value = self.visit(node.value)
+        if node.annotation:
+            node.annotation = self.visit(node.annotation)
+        self._bind_target(node.target)
+        node.target = self.visit(node.target)
+        return node
+
+    def visit_For(self, node):
+        node.iter = self.visit(node.iter)
+        self._bind_target(node.target)
+        node.target = self.visit(node.target)
+        node.body = [self.visit(stmt) for stmt in node.body]
+        node.orelse = [self.visit(stmt) for stmt in node.orelse]
+        return node
+
+    def visit_AsyncFor(self, node):
+        return self.visit_For(node)
+
+    def visit_With(self, node):
+        for item in node.items:
+            item.context_expr = self.visit(item.context_expr)
+            if item.optional_vars:
+                self._bind_target(item.optional_vars)
+                item.optional_vars = self.visit(item.optional_vars)
+        node.body = [self.visit(stmt) for stmt in node.body]
+        return node
+
+    def visit_AsyncWith(self, node):
+        return self.visit_With(node)
+
+    def visit_ExceptHandler(self, node):
+        if node.type:
+            node.type = self.visit(node.type)
+        if node.name:
+            self._bind_name(node.name)
+        node.body = [self.visit(stmt) for stmt in node.body]
+        return node
+
+    def visit_comprehension(self, node):
+        node.iter = self.visit(node.iter)
+        self._bind_target(node.target)
+        node.target = self.visit(node.target)
+        node.ifs = [self.visit(i) for i in node.ifs]
+        return node
+
+    def visit_FunctionDef(self, node):
+        saved_global = self.global_declarations
+        saved_nonlocal = self.nonlocal_declarations
+        self.global_declarations = set()
+        self.nonlocal_declarations = set()
+
+        if self._has_skip_obf_decorator(node):
+            self.skip_obf_depth += 1
+            self.generic_visit(node)
+            self.skip_obf_depth -= 1
+            self.global_declarations = saved_global
+            self.nonlocal_declarations = saved_nonlocal
+            return node
+
+        self._push_scope()
+        for name in self._arg_names(node.args):
+            self._bind_name(name)
+        node.decorator_list = [self.visit(d) for d in node.decorator_list]
+        node.body = [self.visit(stmt) for stmt in node.body]
+        node.returns = self.visit(node.returns) if node.returns else None
+        self._pop_scope()
+
+        self.global_declarations = saved_global
+        self.nonlocal_declarations = saved_nonlocal
+        return node
+
+    def visit_AsyncFunctionDef(self, node):
+        return self.visit_FunctionDef(node)
 
     def _get_builtin_attr(self, builtin_name: str) -> ast.Attribute:
         """
@@ -82,33 +235,21 @@ class BuiltinDispatcherTransformer(ast.NodeTransformer):
             ctx=ast.Load()
         )
 
-    def visit_Import(self, node: ast.Import) -> ast.AST:
-        for alias in node.names:
-            if alias.name == 'builtins':
-                self.imported_builtins.add(alias.asname or 'builtins')
-        return node
-
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> ast.AST:
-        if node.module == 'builtins':
-            for alias in node.names:
-                self.imported_builtins.add(alias.asname or alias.name)
-        return node
-
     def visit_Call(self, node: ast.Call) -> ast.AST:
         if self.skip_obf_depth > 0:
             return self.generic_visit(node)
 
         # print() → _dispatcher.ghjfkd()
         if isinstance(node.func, ast.Name):
-            if node.func.id in BUILTIN_FUNCTIONS:
+            if node.func.id in BUILTIN_FUNCTIONS and not self._is_shadowed(node.func.id):
                 if node.func.id not in self.builtins_map:
                     self.builtins_map[node.func.id] = generate_random_name(
                         '_', self.name_gen_settings
                     )
                 new_call = ast.Call(
                     func=self._get_builtin_attr(node.func.id),
-                    args=node.args,
-                    keywords=node.keywords
+                    args=[self.visit(arg) for arg in node.args],
+                    keywords=[self.visit(kw) for kw in node.keywords]
                 )
                 ast.copy_location(new_call, node)
                 return new_call
@@ -124,8 +265,8 @@ class BuiltinDispatcherTransformer(ast.NodeTransformer):
                             )
                         new_call = ast.Call(
                             func=self._get_builtin_attr(node.func.attr),
-                            args=node.args,
-                            keywords=node.keywords
+                            args=[self.visit(arg) for arg in node.args],
+                            keywords=[self.visit(kw) for kw in node.keywords]
                         )
                         ast.copy_location(new_call, node)
                         return new_call
@@ -133,7 +274,13 @@ class BuiltinDispatcherTransformer(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_Name(self, node: ast.Name) -> ast.AST:
-        if node.id in BUILTIN_FUNCTIONS and isinstance(node.ctx, ast.Load):
+        if self.skip_obf_depth > 0:
+            return node
+        if (
+            node.id in BUILTIN_FUNCTIONS
+            and isinstance(node.ctx, ast.Load)
+            and not self._is_shadowed(node.id)
+        ):
             if node.id not in self.builtins_map:
                 self.builtins_map[node.id] = generate_random_name(
                     '_', self.name_gen_settings
