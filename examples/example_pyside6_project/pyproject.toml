@@ -22,7 +22,7 @@ anti_tamper_builtins = false
 # Obfuscation Parameters
 junk_density = 1.0
 opaque_complexity = "high"
-name_gen = "chinese"
+name_gen = "l-i"
 banner = "Obfuscated by PyLockWare"
 
 # Anti-Debug (leave commented to disable)
