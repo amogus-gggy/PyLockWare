@@ -148,6 +148,7 @@ class Builder:
             call_obf=self.config.call_obf,
             crypt=self.config.crypt,
             anti_tamper_builtins=self.config.anti_tamper_builtins,
+            expr_virtualize=self.config.expr_virtualize,
             enable_nuitka=self.config.enable_nuitka,
             nuitka_onefile=self.config.nuitka_onefile,
             nuitka_standalone=self.config.nuitka_standalone,

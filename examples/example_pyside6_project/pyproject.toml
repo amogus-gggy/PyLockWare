@@ -7,7 +7,7 @@ entry_function = "main"
 output_dir = "dist"
 
 # Obfuscation Options
-remap = true
+remap = false
 string_prot = true
 num_obf = true
 import_obf = false
@@ -15,18 +15,20 @@ state_machine = true
 builtin_dispatcher = true
 junk_code = true
 decorator_obf = true
-call_obf = true
-disable_traceback = true
-crypt = true
+call_obf = false
+crypt = false
+disable_traceback = false
 anti_tamper_builtins = false
+expr_virtualize = true
+anti_debug = false
+
 # Obfuscation Parameters
 junk_density = 1.0
 opaque_complexity = "high"
-name_gen = "chinese"
+name_gen = "l-i"
 banner = "Obfuscated by PyLockWare"
 
 # Anti-Debug (leave commented to disable)
-# anti_debug = "native"  # or "crossplatform"
 anti_debug_mode = "crossplatform"
 
 # Nuitka Options (for compiling to executable)

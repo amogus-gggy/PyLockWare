@@ -522,6 +522,19 @@ class NumberObfuscator(ast.NodeTransformer):
 
         return node
 
+    def visit_Module(self, node):
+        # First transform all child nodes (this populates self.required_imports)
+        self.generic_visit(node)
+        # Then prepend any needed imports at the top of the module
+        import_nodes = []
+        if 'os' in self.required_imports:
+            import_nodes.append(ast.Import(names=[ast.alias(name='os')]))
+        if 'sys' in self.required_imports:
+            import_nodes.append(ast.Import(names=[ast.alias(name='sys')]))
+        if import_nodes:
+            node.body = import_nodes + node.body
+        return node
+
     def get_required_imports(self) -> str:
         imports = []
         if 'os' in self.required_imports:

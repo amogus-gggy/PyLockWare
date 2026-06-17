@@ -33,6 +33,7 @@ class BuildConfig:
     crypt: bool = False
     disable_traceback: bool = True
     anti_tamper_builtins: bool = True
+    expr_virtualize: bool = False
     
     # Параметры обфускации
     junk_density: float = 0.5
@@ -179,6 +180,7 @@ def _save_pretty_toml(data: dict, path: Path, config: BuildConfig) -> None:
     lines.append(f"crypt = {str(config.crypt).lower()}")
     lines.append(f"disable_traceback = {str(config.disable_traceback).lower()}")
     lines.append(f"anti_tamper_builtins = {str(config.anti_tamper_builtins).lower()}")
+    lines.append(f"expr_virtualize = {str(config.expr_virtualize).lower()}")
     lines.append(f"anti_debug = {str(bool(config.anti_debug)).lower()}")
     lines.append("")
 

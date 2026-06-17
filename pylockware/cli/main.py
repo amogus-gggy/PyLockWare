@@ -38,6 +38,7 @@ def main_cli():
     parser.add_argument("--decorator-obf", action="store_true", help="Enable decorator obfuscation (converts @decorator to func = decorator(func))")
     parser.add_argument("--call-obf", action="store_true", help="Enable chained-table call obfuscation (_call/_resolve)")
     parser.add_argument("--crypt", action="store_true", help="Enable function encryption using machine fingerprinting and XOR encryption")
+    parser.add_argument("--expr-virtualize", action="store_true", help="Enable expression virtualization (compiles expressions to custom bytecode)")
     parser.add_argument("--anti-tamper-builtins", action=argparse.BooleanOptionalAction, default=True,
                         help="Enable runtime anti-tamper guard that crashes on patched Python builtins (default: enabled)")
     parser.add_argument("--all", action="store_true", help="Enable all obfuscation options (except Nuitka)")
@@ -66,6 +67,8 @@ def main_cli():
         print("       Please use only one of these options at a time.")
         sys.exit(1)
 
+
+
     # If --all is specified, enable all obfuscation options (except Nuitka)
     if args.all:
         args.remap = False
@@ -78,6 +81,7 @@ def main_cli():
         args.disable_traceback = True
         args.decorator_obf = True
         args.call_obf = False
+        args.expr_virtualize = True
 
     # Determine anti_debug mode
     anti_debug_value = None
@@ -113,6 +117,7 @@ def main_cli():
         call_obf=args.call_obf,
         crypt=args.crypt,
         anti_tamper_builtins=args.anti_tamper_builtins,
+        expr_virtualize=args.expr_virtualize,
         enable_nuitka=args.nuitka,
         nuitka_onefile=args.nuitka_onefile,
         nuitka_standalone=args.nuitka_standalone,

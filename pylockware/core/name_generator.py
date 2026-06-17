@@ -20,7 +20,8 @@ class NameGenerator:
             'mixed': string.ascii_letters + string.digits + ''.join(chr(i) for i in range(0x4E00, 0x9FFF)),
             'numbers': string.digits,
             'hex': string.hexdigits,
-            'ascii': string.printable.strip()  # All printable ASCII except whitespace
+            'ascii': string.printable.strip(), # All printable ASCII except whitespace
+            'l-i': "IliL"
         }
         
         self.char_set = self.char_sets.get(char_set, self.char_sets['english'])
@@ -36,7 +37,7 @@ class NameGenerator:
         Returns:
             Randomly generated name
         """
-        length = 32  # Default length
+        length = 128  # Default length
         
         # If prefix is empty or doesn't start with letter/underscore, add underscore
         if not prefix or (prefix[0] not in string.ascii_letters + '_'):
