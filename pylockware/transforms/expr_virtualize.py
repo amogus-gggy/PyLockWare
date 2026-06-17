@@ -1,500 +1,629 @@
-
+"""
+Expression Virtualization for PyLockWare.
+Compiles Python expressions to custom bytecode and executes them in a VM.
+"""
 import ast
 import base64
+import struct
+import uuid
 import random
-import marshal
-import hashlib
-import time
-import builtins as _builtins_mod
+import sys
 
 
-def generate_opcodes_from_seed(seed_bytes):
-    h = hashlib.sha256(seed_bytes).digest()
-    opcodes = {}
-    used = set([0])
-    opcode_names = [
-        'CONST', 'GET_VAR', 'SET_VAR', 'GETATTR', 'SETATTR', 'GETITEM', 'SETITEM',
-        'DELITEM', 'SLICE', 'CALL', 'ADD', 'SUB', 'MUL', 'TRUEDIV', 'FLOORDIV',
-        'MOD', 'POW', 'LSHIFT', 'RSHIFT', 'BITOR', 'BITXOR', 'BITAND', 'MATMUL',
-        'UADD', 'USUB', 'INVERT', 'NOT', 'AND', 'OR', 'EQ', 'NE', 'LT', 'LE',
-        'GT', 'GE', 'IS', 'IS_NOT', 'CONTAINS', 'NOT_CONTAINS', 'COMPARE',
-        'IFEXP', 'LIST', 'TUPLE', 'SET', 'DICT', 'LISTCOMP', 'SETCOMP',
-        'DICTCOMP', 'GENEXP', 'FSTRING', 'STARRED', 'NAMEDEXPR', 'LAMBDA',
-        'AWAIT', 'YIELD', 'YIELDFROM', 'BUILD_SLICE', 'POP', 'DUP', 'SWAP',
-        'JUMP_IF_FALSE', 'JUMP', 'JUMP_IF_TRUE', 'LOAD_FAST', 'STORE_FAST',
+def _rand_name():
+    return "_h_" + uuid.uuid4().hex[:8]
+
+
+def _gen_opcodes():
+    op_names = [
+        'LOAD_VAR', 'LOAD_CONST', 'ADD', 'SUB', 'MUL', 'DIV',
+        'FLOORDIV', 'MOD', 'CALL', 'RETURN', 'COMPARE_GT', 'COMPARE_LT',
+        'COMPARE_GTE', 'COMPARE_LTE', 'COMPARE_EQ', 'COMPARE_NEQ',
+        'NEGATE', 'NOT_', 'BOOL_AND', 'BOOL_OR', 'GET_SUBSCRIPT',
     ]
-    idx = 0
-    for name in opcode_names:
+    opcodes = {}
+    used = set()
+    for name in op_names:
         while True:
-            val = h[idx % len(h)]
-            if val not in used and val != 0:
-                opcodes[name] = val
+            val = random.randint(0, 255)
+            if val not in used:
                 used.add(val)
+                opcodes[name] = val
                 break
-            idx += 1
-            if idx > 1000:
-                for i in range(1, 256):
-                    if i not in used:
-                        opcodes[name] = i
-                        used.add(i)
-                        break
-                break
-        idx += 1
-    opcodes['END'] = 0
     return opcodes
 
 
-class VMExpressionCompiler(ast.NodeVisitor):
-    def __init__(self, opcodes):
-        self.bytecode = bytearray()
-        self.const_pool = []
-        self.var_names = []
-        self.attr_names = []
+def _gen_vm_runtime():
+    opcodes = _gen_opcodes()
+    handler_keys = [
+        'load_var', 'load_const', 'add', 'sub', 'mul', 'div',
+        'floordiv', 'mod', 'call', 'return', 'compare_gt', 'compare_lt',
+        'compare_gte', 'compare_lte', 'compare_eq', 'compare_neq',
+        'negate', 'not_', 'bool_and', 'bool_or', 'get_subscript',
+    ]
+    h_names = {k: _rand_name() for k in handler_keys}
+    h_garbage = _rand_name()
+
+    key = random.randint(1, 254)
+    index_key = random.randint(1, 255)
+
+    num_total = 48
+    indices = list(range(num_total))
+    random.shuffle(indices)
+
+    real_ops = [
+        ('LOAD_VAR', h_names['load_var']),
+        ('LOAD_CONST', h_names['load_const']),
+        ('ADD', h_names['add']),
+        ('SUB', h_names['sub']),
+        ('MUL', h_names['mul']),
+        ('DIV', h_names['div']),
+        ('FLOORDIV', h_names['floordiv']),
+        ('MOD', h_names['mod']),
+        ('CALL', h_names['call']),
+        ('RETURN', h_names['return']),
+        ('COMPARE_GT', h_names['compare_gt']),
+        ('COMPARE_LT', h_names['compare_lt']),
+        ('COMPARE_GTE', h_names['compare_gte']),
+        ('COMPARE_LTE', h_names['compare_lte']),
+        ('COMPARE_EQ', h_names['compare_eq']),
+        ('COMPARE_NEQ', h_names['compare_neq']),
+        ('NEGATE', h_names['negate']),
+        ('NOT_', h_names['not_']),
+        ('BOOL_AND', h_names['bool_and']),
+        ('BOOL_OR', h_names['bool_or']),
+        ('GET_SUBSCRIPT', h_names['get_subscript']),
+    ]
+
+    op_to_idx = {}
+    func_array = [h_garbage] * num_total
+
+    for op_name, h_name in real_ops:
+        idx = indices.pop()
+        op_to_idx[op_name] = idx
+        func_array[idx] = h_name
+
+    func_array_str = ", ".join(func_array)
+
+    hv = h_names
+
+    def _h(name):
+        return hv[name]
+
+    handlers = []
+
+    handlers.append(f"""
+def {_h('load_var')}(stack, code, pc, ns, names, consts):
+    idx = code[pc]; pc += 1
+    name = names[idx]
+    if name in ns:
+        stack.append(ns[name])
+    else:
+        _b = __builtins__
+        if isinstance(_b, dict):
+            stack.append(_b.get(name))
+        else:
+            stack.append(getattr(_b, name, None))
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('load_const')}(stack, code, pc, ns, names, consts):
+    idx = code[pc]; pc += 1
+    stack.append(consts[idx])
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('add')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a + b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('sub')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a - b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('mul')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a * b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('div')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a / b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('floordiv')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a // b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('mod')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a % b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('call')}(stack, code, pc, ns, names, consts):
+    num_args = code[pc]; pc += 1
+    args = [stack.pop() for _ in range(num_args)][::-1]
+    func = stack.pop()
+    stack.append(func(*args))
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('return')}(stack, code, pc, ns, names, consts):
+    raise _VMReturn(stack.pop())
+""")
+
+    handlers.append(f"""
+def {_h('compare_gt')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a > b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('compare_lt')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a < b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('compare_gte')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a >= b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('compare_lte')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a <= b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('compare_eq')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a == b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('compare_neq')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a != b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('negate')}(stack, code, pc, ns, names, consts):
+    a = stack.pop()
+    stack.append(-a)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('not_')}(stack, code, pc, ns, names, consts):
+    a = stack.pop()
+    stack.append(not a)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('bool_and')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a and b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('bool_or')}(stack, code, pc, ns, names, consts):
+    b = stack.pop(); a = stack.pop()
+    stack.append(a or b)
+    return pc
+""")
+
+    handlers.append(f"""
+def {_h('get_subscript')}(stack, code, pc, ns, names, consts):
+    idx = stack.pop(); obj = stack.pop()
+    stack.append(obj[idx])
+    return pc
+""")
+
+    handlers.append(f"""
+def {h_garbage}(stack, code, pc, ns, names, consts):
+    stack.append(None)
+    return pc
+""")
+
+    handlers_str = "\n".join(handlers)
+
+    vm_code = f"""\
+class _VMReturn(Exception):
+    def __init__(self, value):
+        self.value = value
+
+{handlers_str}
+
+all_funcs = [{func_array_str}]
+
+_VK = {key}
+_VIK = {index_key}
+
+import base64 as _b64
+import struct as _struct
+
+def _vmentry(b64_str, ns=None):
+    if ns is None:
+        ns = {{}}
+    data = _b64.b64decode(b64_str)
+    data = bytes([b ^ _VK for b in data])
+    offset = 0
+    num_consts = _struct.unpack('<H', data[offset:offset+2])[0]; offset += 2
+    consts = []
+    for _ in range(num_consts):
+        ctype = data[offset]; offset += 1
+        clen = _struct.unpack('<H', data[offset:offset+2])[0]; offset += 2
+        cdata = data[offset:offset+clen]; offset += clen
+        if ctype == 0: consts.append(_struct.unpack('<i', cdata)[0])
+        elif ctype == 1: consts.append(_struct.unpack('<d', cdata)[0])
+        elif ctype == 2: consts.append(cdata.decode('utf-8'))
+        elif ctype == 3: consts.append(bool(cdata[0]))
+        elif ctype == 4: consts.append(None)
+    num_names = _struct.unpack('<H', data[offset:offset+2])[0]; offset += 2
+    names = []
+    for _ in range(num_names):
+        nlen = data[offset]; offset += 1
+        names.append(data[offset:offset+nlen].decode('utf-8')); offset += nlen
+    mapping_len = _struct.unpack('<H', data[offset:offset+2])[0]; offset += 2
+    encrypted_mapping = data[offset:offset+mapping_len]; offset += mapping_len
+    mapping = bytes([b ^ _VIK for b in encrypted_mapping])
+    code = data[offset:]
+    stack = []
+    pc = 0
+    try:
+        while pc < len(code):
+            op = code[pc]; pc += 1
+            pc = all_funcs[mapping[op]](stack, code, pc, ns, names, consts)
+    except _VMReturn as e:
+        return e.value
+"""
+    return vm_code, opcodes, op_to_idx, key, index_key
+
+
+def encrypt_and_encode(data, key=0xA5):
+    enc = bytes([b ^ key for b in data])
+    return base64.b64encode(enc).decode('ascii')
+
+
+_VM_RUNTIME_CODE, _OPCODES, _OP_TO_IDX, _VM_KEY, _VM_INDEX_KEY = _gen_vm_runtime()
+VM_RUNTIME_CODE = _VM_RUNTIME_CODE
+
+
+class ExprCompiler(ast.NodeVisitor):
+
+    def __init__(self, opcodes, index_key, op_to_idx):
         self.opcodes = opcodes
-        self.opcode_names = {v: k for k, v in opcodes.items()}
+        self.index_key = index_key
+        self.op_to_idx = op_to_idx
+        self.code = bytearray()
+        self.consts = []
+        self.names = []
 
-    def _emit(self, opcode_name, *args):
-        self.bytecode.append(self.opcodes[opcode_name])
-        for arg in args:
-            if isinstance(arg, int):
-                self.bytecode.extend(arg.to_bytes(2, 'little'))
-            elif isinstance(arg, str):
-                data = arg.encode('utf-8')
-                self.bytecode.extend(len(data).to_bytes(2, 'little'))
-                self.bytecode.extend(data)
+    def generic_visit(self, node):
+        raise ValueError(f"Unsupported node type: {type(node).__name__}")
 
-    def _add_const(self, value):
+    def add_const(self, value):
         try:
-            return self.const_pool.index(value)
-        except ValueError:
-            idx = len(self.const_pool)
-            self.const_pool.append(value)
-            return idx
+            if value not in self.consts:
+                self.consts.append(value)
+            return self.consts.index(value)
+        except TypeError:
+            self.consts.append(value)
+            return len(self.consts) - 1
 
-    def _add_var(self, name):
-        try:
-            return self.var_names.index(name)
-        except ValueError:
-            idx = len(self.var_names)
-            self.var_names.append(name)
-            return idx
+    def add_name(self, name):
+        if name not in self.names:
+            self.names.append(name)
+        return self.names.index(name)
 
-    def _add_attr(self, name):
-        try:
-            return self.attr_names.index(name)
-        except ValueError:
-            idx = len(self.attr_names)
-            self.attr_names.append(name)
-            return idx
-
-    def compile(self, node):
-        self.visit(node)
-        self._emit('END')
-        return bytes(self.bytecode), self.const_pool, self.var_names, self.attr_names
-
-    def visit_Constant(self, node):
-        idx = self._add_const(node.value)
-        self._emit('CONST', idx)
+    def visit_Expression(self, node):
+        self.visit(node.body)
 
     def visit_Name(self, node):
-        if isinstance(node.ctx, ast.Load):
-            idx = self._add_var(node.id)
-            self._emit('GET_VAR', idx)
-        else:
-            raise ValueError("Store/Delete in expression")
+        idx = self.add_name(node.id)
+        self.code.append(self.opcodes['LOAD_VAR'])
+        self.code.append(idx)
+
+    def visit_Constant(self, node):
+        idx = self.add_const(node.value)
+        self.code.append(self.opcodes['LOAD_CONST'])
+        self.code.append(idx)
 
     def visit_BinOp(self, node):
-        op_map = {
-            ast.Add: 'ADD', ast.Sub: 'SUB', ast.Mult: 'MUL',
-            ast.Div: 'TRUEDIV', ast.FloorDiv: 'FLOORDIV', ast.Mod: 'MOD',
-            ast.Pow: 'POW', ast.LShift: 'LSHIFT', ast.RShift: 'RSHIFT',
-            ast.BitOr: 'BITOR', ast.BitXor: 'BITXOR', ast.BitAnd: 'BITAND',
-            ast.MatMult: 'MATMUL',
-        }
         self.visit(node.left)
         self.visit(node.right)
-        self._emit(op_map[type(node.op)])
-
-    def visit_UnaryOp(self, node):
-        op_map = {
-            ast.UAdd: 'UADD', ast.USub: 'USUB',
-            ast.Invert: 'INVERT', ast.Not: 'NOT',
-        }
-        self.visit(node.operand)
-        self._emit(op_map[type(node.op)])
-
-    def visit_BoolOp(self, node):
-        op_map = {ast.And: 'AND', ast.Or: 'OR'}
-        for value in node.values:
-            self.visit(value)
-        self._emit(op_map[type(node.op)], len(node.values))
-
-    def visit_Compare(self, node):
-        self.visit(node.left)
-        for comparator in node.comparators:
-            self.visit(comparator)
-        op_map = {
-            ast.Eq: 'EQ', ast.NotEq: 'NE', ast.Lt: 'LT', ast.LtE: 'LE',
-            ast.Gt: 'GT', ast.GtE: 'GE', ast.Is: 'IS', ast.IsNot: 'IS_NOT',
-            ast.In: 'CONTAINS', ast.NotIn: 'NOT_CONTAINS',
-        }
-        ops = [self.opcodes[op_map[type(op)]] for op in node.ops]
-        ops_idx = self._add_const(tuple(ops))
-        self._emit('COMPARE', ops_idx, len(node.ops))
-
-    def visit_Subscript(self, node):
-        self.visit(node.value)
-        self.visit(node.slice)
-        if isinstance(node.ctx, ast.Load):
-            self._emit('GETITEM')
-        elif isinstance(node.ctx, ast.Store):
-            self._emit('SETITEM')
-        else:
-            self._emit('DELITEM')
-
-    def visit_Slice(self, node):
-        if node.lower:
-            self.visit(node.lower)
-        else:
-            self._emit('CONST', self._add_const(None))
-        if node.upper:
-            self.visit(node.upper)
-        else:
-            self._emit('CONST', self._add_const(None))
-        if node.step:
-            self.visit(node.step)
-        else:
-            self._emit('CONST', self._add_const(None))
-        self._emit('BUILD_SLICE')
-
-    def visit_Attribute(self, node):
-        self.visit(node.value)
-        idx = self._add_attr(node.attr)
-        if isinstance(node.ctx, ast.Load):
-            self._emit('GETATTR', idx)
-        elif isinstance(node.ctx, ast.Store):
-            self._emit('SETATTR', idx)
-        else:
-            self._emit('DELATTR', idx)
+        if isinstance(node.op, ast.Add):
+            self.code.append(self.opcodes['ADD'])
+        elif isinstance(node.op, ast.Sub):
+            self.code.append(self.opcodes['SUB'])
+        elif isinstance(node.op, ast.Mult):
+            self.code.append(self.opcodes['MUL'])
+        elif isinstance(node.op, ast.Div):
+            self.code.append(self.opcodes['DIV'])
+        elif isinstance(node.op, ast.FloorDiv):
+            self.code.append(self.opcodes['FLOORDIV'])
+        elif isinstance(node.op, ast.Mod):
+            self.code.append(self.opcodes['MOD'])
 
     def visit_Call(self, node):
         self.visit(node.func)
         for arg in node.args:
             self.visit(arg)
-        for kw in reversed(node.keywords):
-            self.visit(kw.value)
-        self._emit('CALL', len(node.args), len(node.keywords))
-        for kw in node.keywords:
-            data = (kw.arg or '').encode('utf-8')
-            self.bytecode.extend(len(data).to_bytes(2, 'little'))
-            self.bytecode.extend(data)
+        self.code.append(self.opcodes['CALL'])
+        self.code.append(len(node.args))
 
-    def visit_IfExp(self, node):
-        self.visit(node.test)
-        self.visit(node.body)
-        self.visit(node.orelse)
-        self._emit('IFEXP')
+    def visit_UnaryOp(self, node):
+        self.visit(node.operand)
+        if isinstance(node.op, ast.USub):
+            self.visit(ast.Constant(value=-1))
+            self.code.append(self.opcodes['MUL'])
+        elif isinstance(node.op, ast.UAdd):
+            pass
 
-    def visit_List(self, node):
-        for e in node.elts:
-            self.visit(e)
-        self._emit('LIST', len(node.elts))
+    def visit_Compare(self, node):
+        self.visit(node.left)
+        for op, comp in zip(node.ops, node.comparators):
+            self.visit(comp)
+            if isinstance(op, ast.Gt):
+                self.code.append(self.opcodes['COMPARE_GT'])
+            elif isinstance(op, ast.Lt):
+                self.code.append(self.opcodes['COMPARE_LT'])
+            elif isinstance(op, ast.GtE):
+                self.code.append(self.opcodes['COMPARE_GTE'])
+            elif isinstance(op, ast.LtE):
+                self.code.append(self.opcodes['COMPARE_LTE'])
+            elif isinstance(op, ast.Eq):
+                self.code.append(self.opcodes['COMPARE_EQ'])
+            elif isinstance(op, ast.NotEq):
+                self.code.append(self.opcodes['COMPARE_NEQ'])
 
-    def visit_Tuple(self, node):
-        for e in node.elts:
-            self.visit(e)
-        self._emit('TUPLE', len(node.elts))
+    def visit_BoolOp(self, node):
+        for val in node.values:
+            self.visit(val)
+        for _ in range(len(node.values) - 1):
+            if isinstance(node.op, ast.And):
+                self.code.append(self.opcodes['BOOL_AND'])
+            elif isinstance(node.op, ast.Or):
+                self.code.append(self.opcodes['BOOL_OR'])
 
-    def visit_Set(self, node):
-        for e in node.elts:
-            self.visit(e)
-        self._emit('SET', len(node.elts))
-
-    def visit_Dict(self, node):
-        for k, v in zip(node.keys, node.values):
-            if k:
-                self.visit(k)
-            else:
-                self._emit('CONST', self._add_const(None))
-            self.visit(v)
-        self._emit('DICT', len(node.keys))
-
-    def visit_ListComp(self, node):
-        self._emit('LISTCOMP')
-
-    def visit_SetComp(self, node):
-        self._emit('SETCOMP')
-
-    def visit_GeneratorExp(self, node):
-        self._emit('GENEXP')
-
-    def visit_DictComp(self, node):
-        self._emit('DICTCOMP')
-
-    def visit_JoinedStr(self, node):
-        self._emit('FSTRING')
-
-    def visit_Starred(self, node):
+    def visit_Subscript(self, node):
         self.visit(node.value)
-        self._emit('STARRED')
+        self.visit(node.slice)
+        self.code.append(self.opcodes['GET_SUBSCRIPT'])
 
-    def visit_NamedExpr(self, node):
-        self.visit(node.value)
-        idx = self._add_var(node.target.id)
-        self._emit('NAMEDEXPR', idx)
+    def compile_node(self, node):
+        self.visit(node)
+        self.code.append(self.opcodes['RETURN'])
+        return self.serialize()
 
-    def visit_Lambda(self, node):
-        self._emit('LAMBDA')
+    def serialize(self):
+        b = bytearray()
+        b.extend(struct.pack('<H', len(self.consts)))
+        for c in self.consts:
+            if isinstance(c, int) and not isinstance(c, bool):
+                b.append(0); b.extend(struct.pack('<H', 4)); b.extend(struct.pack('<i', c))
+            elif isinstance(c, float):
+                b.append(1); b.extend(struct.pack('<H', 8)); b.extend(struct.pack('<d', c))
+            elif isinstance(c, str):
+                b.append(2)
+                enc = c.encode('utf-8')
+                b.extend(struct.pack('<H', len(enc))); b.extend(enc)
+            elif isinstance(c, bool):
+                b.append(3); b.extend(struct.pack('<H', 1)); b.append(int(c))
+            elif c is None:
+                b.append(4); b.extend(struct.pack('<H', 0))
 
-    def visit_Await(self, node):
-        self.visit(node.value)
-        self._emit('AWAIT')
+        b.extend(struct.pack('<H', len(self.names)))
+        for n in self.names:
+            enc = n.encode('utf-8')
+            b.append(len(enc)); b.extend(enc)
 
-    def visit_Yield(self, node):
-        if node.value:
-            self.visit(node.value)
-        self._emit('YIELD')
+        mapping = bytearray(256)
+        for i in range(256):
+            mapping[i] = 0 ^ self.index_key
 
-    def visit_YieldFrom(self, node):
-        self.visit(node.value)
-        self._emit('YIELDFROM')
+        for op_name in self.opcodes:
+            mapping[self.opcodes[op_name]] = self.op_to_idx[op_name] ^ self.index_key
+
+        b.extend(struct.pack('<H', len(mapping)))
+        b.extend(mapping)
+        b.extend(self.code)
+        return bytes(b)
 
 
-def compile_expr_to_b64(source_expr):
-    tree = ast.parse(source_expr, mode='eval')
-    seed = bytes(random.randint(0, 255) for _ in range(32))
-    opcodes = generate_opcodes_from_seed(seed)
-    compiler = VMExpressionCompiler(opcodes)
-    bytecode, const_pool, var_names, attr_names = compiler.compile(tree.body)
-    package = {
-        'bytecode': bytecode,
-        'const_pool': const_pool,
-        'var_names': var_names,
-        'attr_names': attr_names,
-    }
-    data = seed + marshal.dumps(package)
-    return base64.b64encode(data).decode('ascii'), var_names
+def compile_expr_to_b64(expr_str):
+    tree = ast.parse(expr_str, mode='eval')
+    compiler = ExprCompiler(_OPCODES, _VM_INDEX_KEY, _OP_TO_IDX)
+    compiler.visit(tree)
+    compiler.code.append(_OPCODES['RETURN'])
+    bytecode = compiler.serialize()
+    var_names = list(compiler.names)
+    b64_str = encrypt_and_encode(bytecode, _VM_KEY)
+    return b64_str, var_names
+
+
+_CALLOBF_NAMES = frozenset({
+    '_call', '_resolve', '_decode', '_method_call', '_get_attr',
+    '_set_attr', '_get_item', '_set_item', '_resolve2', '_resolve3',
+    '_call2', '_get_attr2', '_method_call2',
+})
+
+_UNSUPPORTED_TYPES = (
+    ast.List, ast.Dict, ast.Set, ast.Tuple, ast.IfExp,
+    ast.Attribute, ast.Starred, ast.Slice, ast.Lambda,
+    ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp,
+    ast.Yield, ast.YieldFrom, ast.Await,
+)
+
+_CONST_TYPES = (int, float, str, bool, type(None))
 
 
 class VMVirtualizer(ast.NodeTransformer):
-    def __init__(self):
+
+    def __init__(self, opcodes=None, index_key=None, op_to_idx=None):
+        self.opcodes = opcodes or _OPCODES
+        self.index_key = index_key or _VM_INDEX_KEY
+        self.op_to_idx = op_to_idx or _OP_TO_IDX
         self._target_depth = 0
 
-    _UNSUPPORTED = (ast.Lambda, ast.ListComp, ast.SetComp, ast.GeneratorExp,
-                    ast.DictComp, ast.JoinedStr, ast.Await, ast.Yield, ast.YieldFrom)
-
-    _CALLOBF_NAMES = frozenset({
-        '_call', '_method_call', '_get_attr', '_set_attr',
-        '_get_item', '_set_item', '_resolve', '_decode',
-        '_resolve2', '_resolve3', '_call2', '_get_attr2', '_method_call2',
-    })
-
-    def visit_FunctionDef(self, node):
-        if node.name in self._CALLOBF_NAMES:
-            return node
-        self.generic_visit(node)
-        return node
-
-    def visit_AsyncFunctionDef(self, node):
-        if node.name in self._CALLOBF_NAMES:
-            return node
-        self.generic_visit(node)
-        return node
-
-    def _has_callobf_name(self, node):
-        for child in ast.walk(node):
-            if isinstance(child, ast.Name) and child.id in self._CALLOBF_NAMES:
-                return True
-        return False
+    def _is_supported(self, node):
+        for sub in ast.walk(node):
+            if isinstance(sub, _UNSUPPORTED_TYPES):
+                return False
+            if isinstance(sub, ast.Call):
+                if not isinstance(sub.func, ast.Name):
+                    return False
+                if sub.keywords:
+                    return False
+                for arg in sub.args:
+                    if isinstance(arg, ast.Starred):
+                        return False
+                for kw in sub.keywords:
+                    if kw.arg is None:
+                        return False
+            elif isinstance(sub, ast.BinOp):
+                if not isinstance(sub.op, (ast.Add, ast.Sub, ast.Mult,
+                                           ast.Div, ast.FloorDiv, ast.Mod)):
+                    return False
+            elif isinstance(sub, ast.UnaryOp):
+                if not isinstance(sub.op, (ast.UAdd, ast.USub)):
+                    return False
+            elif isinstance(sub, ast.Compare):
+                for op in sub.ops:
+                    if not isinstance(op, (ast.Gt, ast.Lt, ast.GtE, ast.LtE,
+                                           ast.Eq, ast.NotEq)):
+                        return False
+            elif isinstance(sub, ast.BoolOp):
+                if not isinstance(sub.op, (ast.And, ast.Or)):
+                    return False
+            elif isinstance(sub, ast.Constant):
+                if not isinstance(sub.value, _CONST_TYPES):
+                    return False
+        return True
 
     def _try_compile(self, node):
         if self._target_depth > 0:
             return None
-        if self._has_super_call(node):
+        if not self._is_supported(node):
             return None
-        if isinstance(node, ast.Call):
-            for kw in node.keywords:
-                if kw.arg is None:
+
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.Call):
+                if isinstance(sub.func, ast.Name) and sub.func.id == 'super' and not sub.args:
                     return None
-        for child in ast.walk(node):
-            if isinstance(child, self._UNSUPPORTED):
-                return None
-            if isinstance(child, ast.Name) and child.id in self._CALLOBF_NAMES:
-                return None
+
         try:
-            source = ast.unparse(node)
-            b64_str, var_names = compile_expr_to_b64(source)
-            return b64_str, list(var_names)
+            compiler = ExprCompiler(self.opcodes, self.index_key, self.op_to_idx)
+            compiler.visit(ast.Expression(body=node))
+            compiler.code.append(self.opcodes['RETURN'])
+            bytecode = compiler.serialize()
+            b64_str = encrypt_and_encode(bytecode, _VM_KEY)
+            var_names = list(compiler.names)
+            return b64_str, var_names
         except Exception:
             return None
 
-    def _make_vmentry_call(self, b64_str, ns_vars=None):
-        args = [ast.Constant(value=b64_str)]
-        if ns_vars:
-            dict_keys = [ast.Constant(value=name) for name in ns_vars]
-            dict_values = [ast.Name(id=name, ctx=ast.Load()) for name in ns_vars]
-            args.append(ast.Dict(keys=dict_keys, values=dict_values))
-        return ast.Call(
+    def _transform(self, node):
+        result = self._try_compile(node)
+        if result is None:
+            return node
+
+        b64_str, var_names = result
+
+        dict_keys = [ast.Constant(value=k) for k in var_names]
+        dict_values = [ast.Name(id=k, ctx=ast.Load()) for k in var_names]
+        ns_dict = ast.Dict(keys=dict_keys, values=dict_values)
+
+        new_node = ast.Call(
             func=ast.Name(id='_vmentry', ctx=ast.Load()),
-            args=args,
-            keywords=[]
+            args=[ast.Constant(value=b64_str), ns_dict],
+            keywords=[],
         )
+        return ast.copy_location(new_node, node)
 
     def visit_For(self, node):
-        node.target = self._visit_target(node.target)
+        self._target_depth += 1
         node.iter = self.visit(node.iter)
-        node.body = [self.visit(n) for n in node.body]
-        node.orelse = [self.visit(n) for n in node.orelse]
+        self._target_depth -= 1
+        node.body = [self.visit(s) for s in node.body]
+        node.orelse = [self.visit(s) for s in node.orelse]
         return node
 
     def visit_With(self, node):
+        self._target_depth += 1
+        for item in node.items:
+            item.context_expr = self.visit(item.context_expr)
+        self._target_depth -= 1
         for item in node.items:
             if item.optional_vars:
-                item.optional_vars = self._visit_target(item.optional_vars)
-            item.context_expr = self.visit(item.context_expr)
-        node.body = [self.visit(n) for n in node.body]
+                item.optional_vars = self.visit(item.optional_vars)
+        node.body = [self.visit(s) for s in node.body]
         return node
 
     def visit_Assign(self, node):
-        node.targets = [self._visit_target(t) for t in node.targets]
-        node.value = self.visit(node.value)
-        return node
+        self._target_depth += 1
+        new_targets = [self.visit(t) for t in node.targets]
+        self._target_depth -= 1
+        new_value = self.visit(node.value)
+        return ast.Assign(targets=new_targets, value=new_value)
 
     def visit_AugAssign(self, node):
-        node.target = self._visit_target(node.target)
-        node.value = self.visit(node.value)
-        return node
+        self._target_depth += 1
+        target = self.visit(node.target)
+        self._target_depth -= 1
+        new_value = self.visit(node.value)
+        return ast.AugAssign(target=target, op=node.op, value=new_value)
 
     def visit_AnnAssign(self, node):
-        node.target = self._visit_target(node.target)
-        if node.value:
-            node.value = self.visit(node.value)
-        return node
+        self._target_depth += 1
+        target = self.visit(node.target)
+        self._target_depth -= 1
+        new_value = self.visit(node.value) if node.value else None
+        return ast.AnnAssign(
+            target=target, annotation=node.annotation,
+            value=new_value, simple=node.simple,
+        )
 
     def visit_Delete(self, node):
-        node.targets = [self._visit_target(t) for t in node.targets]
-        return node
+        self._target_depth += 1
+        new_targets = [self.visit(t) for t in node.targets]
+        self._target_depth -= 1
+        return ast.Delete(targets=new_targets)
 
     def visit_NamedExpr(self, node):
-        node.target = self._visit_target(node.target)
-        node.value = self.visit(node.value)
-        return node
-
-    def _visit_target(self, node):
         self._target_depth += 1
-        result = self.visit(node)
+        target = self.visit(node.target)
         self._target_depth -= 1
-        return result
-
-    def visit_BinOp(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_UnaryOp(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_BoolOp(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_Compare(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_Call(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_Attribute(self, node):
-        if self._has_callobf_name(node):
-            return node
-        self.generic_visit(node)
-        if isinstance(node.ctx, ast.Load):
-            info = self._try_compile(node)
-            if info:
-                return self._make_vmentry_call(*info)
-        return node
-
-    def visit_Subscript(self, node):
-        if self._has_callobf_name(node):
-            return node
-        self.generic_visit(node)
-        if isinstance(node.ctx, ast.Load):
-            info = self._try_compile(node)
-            if info:
-                return self._make_vmentry_call(*info)
-        return node
-
-    def visit_IfExp(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_List(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_Tuple(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_Set(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
-
-    def visit_Dict(self, node):
-        if self._has_callobf_name(node):
-            return node
-        info = self._try_compile(node)
-        self.generic_visit(node)
-        if info:
-            return self._make_vmentry_call(*info)
-        return node
+        new_value = self.visit(node.value)
+        return ast.NamedExpr(target=target, value=new_value)
 
     def visit_ListComp(self, node):
         return node
@@ -508,30 +637,53 @@ class VMVirtualizer(ast.NodeTransformer):
     def visit_DictComp(self, node):
         return node
 
-    def visit_JoinedStr(self, node):
+    def visit_FunctionDef(self, node):
+        if node.name in _CALLOBF_NAMES:
+            return node
+        node.decorator_list = [self.visit(d) for d in node.decorator_list]
+        for arg in node.args.args + node.args.posonlyargs + node.args.kwonlyargs:
+            if arg.annotation:
+                arg.annotation = self.visit(arg.annotation)
+        node.args.defaults = [self.visit(d) for d in node.args.defaults]
+        node.args.kw_defaults = [self.visit(d) if d else None
+                                 for d in node.args.kw_defaults]
+        if node.returns:
+            node.returns = self.visit(node.returns)
+        node.body = [self.visit(s) for s in node.body]
         return node
 
-    def visit_Lambda(self, node):
-        return node
+    def visit_AsyncFunctionDef(self, node):
+        return self.visit_FunctionDef(node)
 
-    def visit_Await(self, node):
-        return node
+    def visit_BinOp(self, node):
+        node.left = self.visit(node.left)
+        node.right = self.visit(node.right)
+        return self._transform(node)
 
-    def visit_Yield(self, node):
-        return node
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Name) and node.func.id == '_vmentry':
+            return node
+        node.func = self.visit(node.func)
+        node.args = [self.visit(a) for a in node.args]
+        return self._transform(node)
 
-    def visit_YieldFrom(self, node):
-        return node
+    def visit_UnaryOp(self, node):
+        node.operand = self.visit(node.operand)
+        return self._transform(node)
 
-    def _has_super_call(self, node):
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call):
-                func = child.func
-                if isinstance(func, ast.Name) and func.id == 'super' and not child.args:
-                    return True
-                if isinstance(func, ast.Attribute) and func.attr == 'super':
-                    return True
-        return False
+    def visit_Compare(self, node):
+        node.left = self.visit(node.left)
+        node.comparators = [self.visit(c) for c in node.comparators]
+        return self._transform(node)
+
+    def visit_BoolOp(self, node):
+        node.values = [self.visit(v) for v in node.values]
+        return self._transform(node)
+
+    def visit_Subscript(self, node):
+        node.value = self.visit(node.value)
+        node.slice = self.visit(node.slice)
+        return self._transform(node)
 
 
 def virtualize_code(source):
@@ -542,330 +694,5 @@ def virtualize_code(source):
     return ast.unparse(new_tree)
 
 
-VM_RUNTIME_CODE = """import base64, marshal, hashlib
-
-def _vmentry(b64_str, ns=None):
-    data = base64.b64decode(b64_str)
-    seed = data[:32]
-    package = marshal.loads(data[32:])
-
-    bytecode = package['bytecode']
-    const_pool = package['const_pool']
-    var_names = package['var_names']
-    attr_names = package['attr_names']
-
-    h = hashlib.sha256(seed).digest()
-    opcodes = {}
-    used = set([0])
-    opcode_names = [
-        'CONST', 'GET_VAR', 'SET_VAR', 'GETATTR', 'SETATTR', 'GETITEM', 'SETITEM',
-        'DELITEM', 'SLICE', 'CALL', 'ADD', 'SUB', 'MUL', 'TRUEDIV', 'FLOORDIV',
-        'MOD', 'POW', 'LSHIFT', 'RSHIFT', 'BITOR', 'BITXOR', 'BITAND', 'MATMUL',
-        'UADD', 'USUB', 'INVERT', 'NOT', 'AND', 'OR', 'EQ', 'NE', 'LT', 'LE',
-        'GT', 'GE', 'IS', 'IS_NOT', 'CONTAINS', 'NOT_CONTAINS', 'COMPARE',
-        'IFEXP', 'LIST', 'TUPLE', 'SET', 'DICT', 'LISTCOMP', 'SETCOMP',
-        'DICTCOMP', 'GENEXP', 'FSTRING', 'STARRED', 'NAMEDEXPR', 'LAMBDA',
-        'AWAIT', 'YIELD', 'YIELDFROM', 'BUILD_SLICE', 'POP', 'DUP', 'SWAP',
-        'JUMP_IF_FALSE', 'JUMP', 'JUMP_IF_TRUE', 'LOAD_FAST', 'STORE_FAST',
-    ]
-    idx = 0
-    for name in opcode_names:
-        while True:
-            val = h[idx % len(h)]
-            if val not in used and val != 0:
-                opcodes[name] = val
-                used.add(val)
-                break
-            idx += 1
-            if idx > 1000:
-                for i in range(1, 256):
-                    if i not in used:
-                        opcodes[name] = i
-                        used.add(i)
-                        break
-                break
-        idx += 1
-    opcodes['END'] = 0
-
-    stack = []
-    pc = 0
-
-    def get_op(name):
-        return opcodes.get(name, -1)
-
-    while pc < len(bytecode):
-        op = bytecode[pc]
-        pc += 1
-
-        if op == 0:
-            return stack.pop() if stack else None
-
-        elif op == get_op('CONST'):
-            idx = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            stack.append(const_pool[idx])
-
-        elif op == get_op('GET_VAR'):
-            idx = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            name = var_names[idx]
-            if ns is not None and name in ns:
-                stack.append(ns[name])
-            elif name in globals():
-                stack.append(globals()[name])
-            else:
-                b = __builtins__ if isinstance(__builtins__, dict) else vars(__builtins__)
-                val = b.get(name) if isinstance(b, dict) else getattr(b, name, None)
-                stack.append(val)
-
-        elif op == get_op('GETATTR'):
-            idx = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            obj = stack.pop()
-            name = attr_names[idx]
-            stack.append(getattr(obj, name))
-
-        elif op == get_op('GETITEM'):
-            key = stack.pop()
-            obj = stack.pop()
-            stack.append(obj[key])
-
-        elif op == get_op('BUILD_SLICE'):
-            step = stack.pop()
-            stop = stack.pop()
-            start = stack.pop()
-            stack.append(slice(start, stop, step))
-
-        elif op == get_op('CALL'):
-            argc = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            kwargc = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            kwargs = {}
-            for _ in range(kwargc):
-                kn_len = int.from_bytes(bytecode[pc:pc+2], 'little')
-                pc += 2
-                kn = bytecode[pc:pc+kn_len].decode('utf-8')
-                pc += kn_len
-                kwargs[kn] = stack.pop()
-            args = [stack.pop() for _ in range(argc)]
-            args.reverse()
-            func = stack.pop()
-            stack.append(func(*args, **kwargs))
-
-        elif op == get_op('ADD'):
-            b = stack.pop(); a = stack.pop(); stack.append(a + b)
-        elif op == get_op('SUB'):
-            b = stack.pop(); a = stack.pop(); stack.append(a - b)
-        elif op == get_op('MUL'):
-            b = stack.pop(); a = stack.pop(); stack.append(a * b)
-        elif op == get_op('TRUEDIV'):
-            b = stack.pop(); a = stack.pop(); stack.append(a / b)
-        elif op == get_op('FLOORDIV'):
-            b = stack.pop(); a = stack.pop(); stack.append(a // b)
-        elif op == get_op('MOD'):
-            b = stack.pop(); a = stack.pop(); stack.append(a % b)
-        elif op == get_op('POW'):
-            b = stack.pop(); a = stack.pop(); stack.append(a ** b)
-        elif op == get_op('LSHIFT'):
-            b = stack.pop(); a = stack.pop(); stack.append(a << b)
-        elif op == get_op('RSHIFT'):
-            b = stack.pop(); a = stack.pop(); stack.append(a >> b)
-        elif op == get_op('BITOR'):
-            b = stack.pop(); a = stack.pop(); stack.append(a | b)
-        elif op == get_op('BITXOR'):
-            b = stack.pop(); a = stack.pop(); stack.append(a ^ b)
-        elif op == get_op('BITAND'):
-            b = stack.pop(); a = stack.pop(); stack.append(a & b)
-        elif op == get_op('MATMUL'):
-            b = stack.pop(); a = stack.pop(); stack.append(a @ b)
-        elif op == get_op('UADD'):
-            a = stack.pop(); stack.append(+a)
-        elif op == get_op('USUB'):
-            a = stack.pop(); stack.append(-a)
-        elif op == get_op('INVERT'):
-            a = stack.pop(); stack.append(~a)
-        elif op == get_op('NOT'):
-            a = stack.pop(); stack.append(not a)
-
-        elif op == get_op('AND'):
-            count = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            values = [stack.pop() for _ in range(count)]
-            values.reverse()
-            result = True
-            for v in values:
-                result = result and v
-                if not result: break
-            stack.append(result)
-
-        elif op == get_op('OR'):
-            count = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            values = [stack.pop() for _ in range(count)]
-            values.reverse()
-            result = False
-            for v in values:
-                result = result or v
-                if result: break
-            stack.append(result)
-
-        elif op == get_op('COMPARE'):
-            ops_idx = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            count = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            ops = const_pool[ops_idx]
-            comparators = [stack.pop() for _ in range(count)]
-            comparators.reverse()
-            left = stack.pop()
-            rev = {v: k for k, v in opcodes.items()}
-            result = True
-            current = left
-            for op_code, right in zip(ops, comparators):
-                op_name = rev.get(op_code, '')
-                if 'EQ' in op_name and 'NE' not in op_name: ok = current == right
-                elif 'NE' in op_name: ok = current != right
-                elif 'LT' in op_name and 'LE' not in op_name: ok = current < right
-                elif 'LE' in op_name: ok = current <= right
-                elif 'GT' in op_name and 'GE' not in op_name: ok = current > right
-                elif 'GE' in op_name: ok = current >= right
-                elif 'IS_NOT' in op_name: ok = current is not right
-                elif 'IS' in op_name and 'NOT' not in op_name: ok = current is right
-                elif 'NOT_CONTAINS' in op_name: ok = current not in right
-                elif 'CONTAINS' in op_name and 'NOT' not in op_name: ok = current in right
-                else: ok = False
-                if not ok:
-                    result = False
-                    break
-                current = right
-            stack.append(result)
-
-        elif op == get_op('IFEXP'):
-            orelse = stack.pop()
-            body = stack.pop()
-            test = stack.pop()
-            stack.append(body if test else orelse)
-
-        elif op == get_op('LIST'):
-            count = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            items = [stack.pop() for _ in range(count)]
-            items.reverse()
-            stack.append(items)
-
-        elif op == get_op('TUPLE'):
-            count = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            items = [stack.pop() for _ in range(count)]
-            items.reverse()
-            stack.append(tuple(items))
-
-        elif op == get_op('SET'):
-            count = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            items = [stack.pop() for _ in range(count)]
-            items.reverse()
-            stack.append(set(items))
-
-        elif op == get_op('DICT'):
-            count = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            items = {}
-            for _ in range(count):
-                v = stack.pop()
-                k = stack.pop()
-                items[k] = v
-            stack.append(items)
-
-        elif op == get_op('STARRED'):
-            pass
-
-        elif op == get_op('NAMEDEXPR'):
-            idx = int.from_bytes(bytecode[pc:pc+2], 'little')
-            pc += 2
-            value = stack[-1]
-            name = var_names[idx]
-            locals()[name] = value
-
-        else:
-            pass
-
-    return stack.pop() if stack else None
-"""
-
-
-def build_virtualized_module(source_code):
-    virtualized = virtualize_code(source_code)
-    return VM_RUNTIME_CODE + "\n" + virtualized
-
-
-def compare_execution(source_code, iterations=1000):
-    print("=" * 60)
-    print("COMPARISON: ORIGINAL vs VIRTUALIZED")
-    print("=" * 60)
-
-    print("\n--- ORIGINAL CODE ---")
-    print(source_code)
-
-    virtualized = virtualize_code(source_code)
-    full_code = VM_RUNTIME_CODE + "\n" + virtualized
-
-    print("\n--- VIRTUALIZED CODE ---")
-    print(virtualized)
-
-    print("\n--- RESULTS ---")
-    orig_ns = {}
-    exec(source_code, orig_ns)
-
-    virt_ns = {}
-    exec(full_code, virt_ns)
-
-    keys = [k for k in orig_ns if not k.startswith('__')]
-    all_ok = True
-    for k in keys:
-        o = orig_ns.get(k)
-        v = virt_ns.get(k)
-        match = o == v or (type(o) == type(v) and type(o) in (list, tuple, set, dict) and list(o) == list(v))
-        if not match:
-            all_ok = False
-        status = "OK" if match else "FAIL"
-        print(f"  {k}: orig={o}, virt={v}, {status}")
-
-    print(f"\n{'ALL MATCH' if all_ok else 'SOME MISMATCHES'}")
-
-    print("\n--- PERFORMANCE ---")
-    t1 = time.perf_counter()
-    for _ in range(iterations):
-        ns = {}
-        exec(source_code, ns)
-    t2 = time.perf_counter()
-    orig_time = t2 - t1
-
-    t1 = time.perf_counter()
-    for _ in range(iterations):
-        ns = {}
-        exec(full_code, ns)
-    t2 = time.perf_counter()
-    virt_time = t2 - t1
-
-    print(f"  Original:    {orig_time:.4f}s ({iterations} runs)")
-    print(f"  Virtualized: {virt_time:.4f}s ({iterations} runs)")
-    print(f"  Overhead:    {virt_time/orig_time:.1f}x")
-
-    return all_ok
-
-
-if __name__ == "__main__":
-    demo_code = """
-a = 10
-b = 20
-c = a + b * 2
-d = [1, 2, 3, 4, 5]
-e = d[0] + d[1:3][0]
-f = c > 30 and b < 50
-g = (a, b, c)
-h = {1: 'one', 2: 'two'}
-result = (a + b) * 2 > 50 and d[0] + d[1] == 3
-"""
-    compare_execution(demo_code, iterations=100)
+def build_virtualized_module(source):
+    return VM_RUNTIME_CODE + "\n" + virtualize_code(source)
