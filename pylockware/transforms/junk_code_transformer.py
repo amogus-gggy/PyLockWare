@@ -945,7 +945,7 @@ class JunkCodeTransformer(ast.NodeTransformer):
     def _generate_junk_compound(self):
         choice = random.choices(
             ['if', 'try', 'for', 'while', 'nested_if', 'nested_try', 'with'],
-            weights=[25, 20, 15, 10, 15, 10, 3, 2],
+            weights=[25, 20, 15, 10, 15, 10, 5],
             k=1
         )[0]
 

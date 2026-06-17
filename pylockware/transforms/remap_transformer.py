@@ -158,6 +158,10 @@ class GlobalRenamer(ast.NodeTransformer):
         if node.id in self.global_declarations:
             return node
 
+        # Don't rename imported module/symbol names
+        if node.id in self.imported_names:
+            return node
+
         if isinstance(node.ctx, ast.Load) and node.id in self.global_replacements:
             node.id = self.global_replacements[node.id]
         elif isinstance(node.ctx, ast.Store) and node.id in self.global_replacements:
