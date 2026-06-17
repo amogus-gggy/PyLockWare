@@ -161,9 +161,17 @@ def _resolve(__k):
 def _call(__k, *args, **kwargs):
     name = _resolve(__k)
     _fr = _inspect.currentframe().f_back
-    _f  = (_fr.f_locals.get(name)
-            or _fr.f_globals.get(name)
-            or getattr(_builtins, name, None))
+    _f = None
+    while _fr is not None:
+        _f = _fr.f_locals.get(name)
+        if _f is not None:
+            break
+        _f = _fr.f_globals.get(name)
+        if _f is not None:
+            break
+        _fr = _fr.f_back
+    if _f is None:
+        _f = getattr(_builtins, name, None)
     if _f is None:
         raise NameError(f"{{name!r}} not found")
     return _f(*args, **kwargs)

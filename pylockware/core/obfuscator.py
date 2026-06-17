@@ -28,6 +28,7 @@ from pylockware.modules.call_obf_module import CallObfModule
 from pylockware.modules.remove_annotations_module import RemoveAnnotationsModule
 from pylockware.modules.crypt_module import CryptModule
 from pylockware.modules.anti_tamper_builtins_module import AntiTamperBuiltinsModule
+from pylockware.modules.expr_virtualize_module import ExprVirtualizeModule
 
 
 class PyObfuscator:
@@ -48,7 +49,8 @@ class PyObfuscator:
                  nuitka_admin: bool = False, nuitka_plugins: List[str] = None, nuitka_extra_imports: List[str] = None,
                  nuitka_options: List[str] = None, disable_traceback: bool = False,
                  decorator_obf: bool = False, type_annotation_obf: bool = False, call_obf: bool = False,
-                 crypt: bool = False, anti_tamper_builtins: bool = True):
+                 crypt: bool = False, anti_tamper_builtins: bool = True,
+                 expr_virtualize: bool = False):
         self.project_path = Path(project_path)
         self.entry_point = Path(entry_point)
         self.entry_function = entry_function
@@ -71,6 +73,7 @@ class PyObfuscator:
         self.call_obf = call_obf  # Enable call obfuscation using getattr pattern
         self.crypt = crypt  # Enable function encryption using machine fingerprinting
         self.anti_tamper_builtins = anti_tamper_builtins  # Enable runtime anti-tamper guard for builtins
+        self.expr_virtualize = expr_virtualize  # Enable expression virtualization
 
         # Nuitka options
         self.enable_nuitka = enable_nuitka
@@ -90,7 +93,6 @@ class PyObfuscator:
 
         # Validate and adjust incompatible options
         self._validate_nuitka_compatibility()
-
         self.setup_modules()
 
     def _validate_nuitka_compatibility(self):
@@ -107,7 +109,7 @@ class PyObfuscator:
         if self.enable_nuitka:
             if self.anti_debug:
                 self.anti_debug = None
-            
+
             if self.import_obf:
                 self.import_obf = False
 
@@ -160,10 +162,7 @@ class PyObfuscator:
             call_obf_config = {'name_gen': self.name_gen}
             self.module_manager.add_module(CallObfModule(call_obf_config))
 
-        # Add modules based on configuration
-        if self.string_prot:
-            string_prot_config = {'name_gen': self.name_gen}
-            self.module_manager.add_module(StringProtectModule(string_prot_config))
+
 
         if self.anti_debug:
             anti_debug_config = {
@@ -200,6 +199,10 @@ class PyObfuscator:
             num_obf_config = {'name_gen': self.name_gen}
             self.module_manager.add_module(NumberObfModule(num_obf_config))
 
+        # Add modules based on configuration
+        if self.string_prot:
+            string_prot_config = {'name_gen': self.name_gen}
+            self.module_manager.add_module(StringProtectModule(string_prot_config))
         # Decorator obfuscation - converts @decorator to explicit assignments
         # Module disabled due to conflict with annotations
         # if self.decorator_obf:
@@ -223,6 +226,10 @@ class PyObfuscator:
         
         # Add RemoveAnnotations module to clean up decorators
         self.module_manager.add_module(RemoveAnnotationsModule({}))
+
+        # ExprVirtualize runs AFTER all AST transforms so its output isn't corrupted
+        if self.expr_virtualize:
+            self.module_manager.add_module(ExprVirtualizeModule({}))
         
         # Add crypt module if enabled - runs after all other obfuscation
         if self.crypt:

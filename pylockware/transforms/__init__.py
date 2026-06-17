@@ -14,6 +14,7 @@ from .crypter import (
     derive_key,
     generate_seed,
 )
+from .expr_virtualize import virtualize_code, VM_RUNTIME_CODE
 
 __all__ = [
     'NumberObfuscator',
@@ -27,4 +28,6 @@ __all__ = [
     'xor_encrypt',
     'derive_key',
     'generate_seed',
+    'virtualize_code',
+    'VM_RUNTIME_CODE',
 ]

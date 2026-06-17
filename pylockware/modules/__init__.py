@@ -9,6 +9,7 @@ from .anti_debug_module import AntiDebugModule
 from .import_obf_module import ImportObfuscateModule
 from .state_machine_module import StateMachineModule
 from .crypt_module import CryptModule
+from .expr_virtualize_module import ExprVirtualizeModule
 
 __all__ = [
     'RemapModule',
@@ -18,4 +19,5 @@ __all__ = [
     'ImportObfuscateModule',
     'StateMachineModule',
     'CryptModule',
+    'ExprVirtualizeModule',
 ]
