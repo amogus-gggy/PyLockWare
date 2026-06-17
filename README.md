@@ -5,12 +5,30 @@
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-## Changelog v2.2.0
-- stability improvements
--  bug fixes
--  improvements in crypt, call_obf modules.
--   Added builtin antitamper(has some bugs, dont use it please)
+## Changelog v2.3.0
+**Added**
+- `--expr-virtualize` — compiles expressions to custom VM bytecode with XOR-encrypted dispatch table
+- Anti-dump string poisoning — 500 random garbage strings injected into junk code to pollute static analysis
+- Poison variable chains — self-referential dead variables that raise `NameError` if stripped by deobfuscators
+- Deeply nested dead code — fake `if` chains, `try/except`, `with` blocks for maximum visual noise
+- `l-i` name generator — visually ambiguous identifiers (`I`/`l`/`i`/`L`)
+- Per-module embedded builtin dispatcher — no external files, each module carries its own obfuscated dispatcher
 
+**Changed**
+- Builtin dispatcher: scope-aware shadowing detection, no longer renames locally overridden builtins
+- String protection: inline decode calls instead of global variables per string
+- Number obfuscation: auto-injects `os`/`sys` imports when needed(bug fix)
+- Remap: skips imported module attributes (fixes `datetime.datetime.hour`-style breaks)
+- Call obfuscation: full frame stack walk for `_call`/`_resolve`
+- Default name length: 32 → 128 chars; junk density: 0.5 → 0.8
+
+**Fixed**
+- `ExprVirtualizeModule` now runs after all AST transforms
+- String protection no longer leaks undeclared globals
+- Removed stale `_builtin_dispatcher.py` references
+
+**Removed**
+- Central `_builtin_dispatcher.py` — fully inlined
 
 ## 🚀 Features
 
