@@ -3,6 +3,7 @@ import base64
 import zlib
 import random
 import string
+from functools import lru_cache
 from pylockware.core.name_generator import generate_random_name
 
 
@@ -22,6 +23,11 @@ class StringProtectionTransformer(ast.NodeTransformer):
         self.fstring_func_name = self._generate_random_name()
         self.format_func_name = self._generate_random_name()
         self.protected_str_prefix = self._generate_random_name()
+
+        # NEW: Cache statistics
+        self.cache_hits = 0
+        self.cache_misses = 0
+        self.unique_encoded_strings = 0
 
     def _generate_random_name(self, prefix=None):
         """Generate a random name. If prefix is provided, use it; otherwise generate completely random name."""
@@ -194,6 +200,7 @@ class StringProtectionTransformer(ast.NodeTransformer):
 
         # Track for metric purposes
         self.protected_strings[encoded] = original_string
+        self.unique_encoded_strings += 1
 
         # Return a Call node: decode_func_name('encoded_string')
         return ast.Call(
@@ -219,12 +226,15 @@ class StringProtectionTransformer(ast.NodeTransformer):
                 # Since we evaluate inline now, we no longer need global variables or prefixes
                 decoder_code = f"""import base64
 import zlib
+from functools import lru_cache
 
+# LRU cache for decode function - caches decoded strings by their encoded form
+@lru_cache(maxsize=128)
 def {transformer.decode_func_name}(encoded_str):
     return zlib.decompress(base64.b64decode(encoded_str.encode('utf-8'))).decode('utf-8')
 
 def {transformer.fstring_func_name}(*args):
-    
+
     result = ""
     for arg in args:
         # Check if the argument is a direct decode function call
@@ -236,7 +246,7 @@ def {transformer.fstring_func_name}(*args):
     return result
 
 def {transformer.format_func_name}(template, *args):
-    
+
     try:
         # Simple string formatting (template is already decoded inline)
         return template.format(*args)
