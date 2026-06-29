@@ -1,9 +1,0 @@
-﻿  pch.cpp
-  dllmain.cpp
-     Создается библиотека C:\Users\fedor\source\repos\amogus-gggy\PyLockWare\native_src\PyLockWareRuntime\x64\Release\PyLockWareRuntime.lib и объект C:\Users\fedor\source\repos\amogus-gggy\PyLockWare\native_src\PyLockWareRuntime\x64\Release\PyLockWareRuntime.exp
-  Создание кода
-  237 of 243 functions (97.5%) were compiled, the rest were copied from previous compilation.
-    4 functions were new in current compilation
-    1 functions had inline decision re-evaluated but remain unchanged
-  Создание кода завершено
-  PyLockWareRuntime.vcxproj -> C:\Users\fedor\source\repos\amogus-gggy\PyLockWare\native_src\PyLockWareRuntime\x64\Release\PyLockWareRuntime.dll

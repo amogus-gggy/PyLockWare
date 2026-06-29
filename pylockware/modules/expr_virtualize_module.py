@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 from typing import Dict, Any
 from pylockware.core.module_base import ModuleBase
-from pylockware.transforms.expr_virtualize import virtualize_code, VM_RUNTIME_CODE
+from pylockware.transforms.expr_virtualize import virtualize_code, VM_RUNTIME_CODE, _VM_ENTRY_NAME
 
 
 class ExprVirtualizeModule(ModuleBase):
@@ -40,7 +40,7 @@ class ExprVirtualizeModule(ModuleBase):
                     virtualized_code = virtualize_code(original_code)
 
                     if virtualized_code != original_code:
-                        final_code = "from _vmentry_rt import _vmentry\n" + virtualized_code
+                        final_code = f"from _vmentry_rt import {_VM_ENTRY_NAME}\n" + virtualized_code
                         with open(py_file, 'w', encoding='utf-8') as f:
                             f.write(final_code)
                         print(f"Virtualized expressions in {py_file}")
