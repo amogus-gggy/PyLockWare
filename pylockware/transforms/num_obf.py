@@ -32,20 +32,7 @@ import random
 
 def atomic_expr(n: int, use_runtime_noise: bool = False) -> str:
     """
-    Возвращает выражение, которое вычисляется в n,
-    но старается не выглядеть как литерал.
-
-    ВАЖНО:
-    - никаких hash(), os.getpid(), random() в результирующем коде
-    - никаких runtime side effects
-    - никаких тяжелых конструкций
-    - выражения всегда deterministic
-    - выражения O(1)
-
-    Args:
-        n: число для обфускации
-        use_runtime_noise:
-            оставлен для совместимости, но runtime noise отключен намеренно
+    
     """
 
     # ---------- helpers ----------
